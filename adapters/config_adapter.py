@@ -1,17 +1,32 @@
 import configparser
 import os
+import sys
 import logging
 from pathlib import Path
 from typing import Dict, Optional
+
+_APP_NAME = "AdamsWorkspacesBuster"
+
+
+def _default_config_path() -> Path:
+    """Returns the platform-appropriate config file path.
+
+    Windows : %LOCALAPPDATA%/AdamsWorkspacesBuster/config.ini
+    Linux   : ~/.config/AdamsWorkspacesBuster/config.ini
+    macOS   : ~/.config/AdamsWorkspacesBuster/config.ini
+    """
+    if sys.platform == "win32":
+        base = Path(os.getenv("LOCALAPPDATA", Path.home()))
+    else:
+        base = Path(os.getenv("XDG_CONFIG_HOME", Path.home() / ".config"))
+    return base / _APP_NAME / "config.ini"
+
 
 class ConfigAdapter:
     """Adapter for reading and writing to the config.ini file without any UI coupling."""
 
     def __init__(self, config_file_path: Optional[Path] = None):
-        if config_file_path:
-            self.config_path = config_file_path
-        else:
-            self.config_path = Path.home() / 'AppData' / 'Local' / 'AdamsWorkspacesBuster' / 'config.ini'
+        self.config_path = config_file_path if config_file_path else _default_config_path()
 
     def load_config(self) -> configparser.ConfigParser:
         config = configparser.ConfigParser()
