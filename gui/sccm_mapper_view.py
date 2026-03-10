@@ -31,16 +31,14 @@ MIGRATION_DB_NAME = 'migration_data.db'
 
 class SccmMapperView(QWidget):
     """PySide6 implementation of the SCCM Software Mapper UI."""
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, encryptor=None):
         super().__init__(parent)
         
         self.db_path = Path(__file__).parent.parent / MIGRATION_DB_NAME
         self.threadpool = QThreadPool()
         
-        # We need a password for decryption in the real app, but for now 
-        # we will leave a placeholder for the encryptor initialization.
         self.db_password = None
-        self.encryptor = None
+        self.encryptor = encryptor
         
         self.ignore_list = set()
         self._load_ignore_list()
