@@ -1,5 +1,5 @@
 import sys
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QInputDialog, QMessageBox, QLineEdit
 import qdarktheme
 
 # Adjust sys.path to ensure execution modules can be imported
@@ -21,8 +21,24 @@ def main():
     # Apply modern dark theme
     qdarktheme.setup_theme(corner_shape="rounded")
 
-    # Instantiate and show main window
-    window = UnifiedMainWindow()
+    # --- Replicate original startup credential prompts ---
+    db_password, ok = QInputDialog.getText(None, "Unlock Database", "Enter Master Password to decrypt Database and Config:", QLineEdit.Password)
+    if not ok or not db_password.strip():
+        QMessageBox.critical(None, "Aborted", "Master password is required. Exiting application.")
+        sys.exit(1)
+
+    ad_user, ok = QInputDialog.getText(None, "AD Login", "Enter your Active Directory Username (domain\\user):")
+    if not ok or not ad_user.strip():
+        QMessageBox.critical(None, "Aborted", "AD Username is required. Exiting application.")
+        sys.exit(1)
+
+    ad_password, ok = QInputDialog.getText(None, "AD Login", "Enter your Active Directory Password:", QLineEdit.Password)
+    if not ok or not ad_password.strip():
+        QMessageBox.critical(None, "Aborted", "AD Password is required. Exiting application.")
+        sys.exit(1)
+
+    # Instantiate and show main window with credentials
+    window = UnifiedMainWindow(db_password=db_password, ad_user=ad_user, ad_password=ad_password)
     window.show()
 
     # Execute the Qt Event Loop

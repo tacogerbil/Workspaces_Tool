@@ -13,9 +13,11 @@ class AwsAdWorkspaceService(WorkspaceServiceProtocol):
     Handles AWS boto3 workspace creation & template management, 
     and Active Directory LDAP validation.
     """
-    def __init__(self, db_adapter: DbAdapter, config_adapter: ConfigAdapter):
+    def __init__(self, db_adapter: DbAdapter, config_adapter: ConfigAdapter, override_ad_user=None, override_ad_pass=None):
         self.db = db_adapter
         self._config_adapter = config_adapter
+        self.override_ad_user = override_ad_user
+        self.override_ad_pass = override_ad_pass
         self._ensure_tables()
         self.aws_client = boto3.client('workspaces', region_name='us-west-2') # Adjust region as needed
 
@@ -74,20 +76,25 @@ class AwsAdWorkspaceService(WorkspaceServiceProtocol):
     def validate_ad_users(self, usernames: List[str]) -> Dict[str, Any]:
         """Validates if the given usernames exist in Active Directory."""
         results = {}
-        ad_creds = self._config_adapter.get_ad_credentials()
+        ad_creds = self._config_adapter.get_ad_credentials() or {}
         
-        if not ad_creds:
-            logging.error("No AD credentials found in config.")
-            return {u: "NO CONFIG" for u in usernames}
+        ad_user = self.override_ad_user or ad_creds.get('user')
+        ad_pass = self.override_ad_pass or ad_creds.get('password')
+        ad_server = ad_creds.get('server')
+        ad_search_base = ad_creds.get('search_base')
+        
+        if not ad_user or not ad_server:
+            logging.error("No AD credentials found in config or overrides.")
+            return {u: "NO CONFIG/CREDS" for u in usernames}
 
         try:
-            server = Server(ad_creds['server'], get_info=ALL)
-            conn = Connection(server, user=ad_creds['user'], password=ad_creds['password'], auto_bind=True)
+            server = Server(ad_server, get_info=ALL)
+            conn = Connection(server, user=ad_user, password=ad_pass, auto_bind=True)
             
             for username in usernames:
                 # Basic LDAP search filter for sAMAccountName
                 search_filter = f"(&(objectClass=user)(objectCategory=person)(sAMAccountName={username}))"
-                conn.search(search_base=ad_creds['search_base'], search_filter=search_filter, attributes=['sAMAccountName'])
+                conn.search(search_base=ad_search_base, search_filter=search_filter, attributes=['sAMAccountName'])
                 
                 if conn.entries:
                     results[username] = "VALID"

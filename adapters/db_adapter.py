@@ -10,8 +10,17 @@ class DbAdapter:
         self.db_path = db_path
 
     def _get_connection(self) -> sqlite3.Connection:
-        """Returns a new connection to the configured database."""
-        return sqlite3.connect(self.db_path)
+        """Returns a new connection to the configured database, ensuring the path exists."""
+        from pathlib import Path
+        db_file = Path(self.db_path).resolve()
+        
+        # Ensure the parent directory exists to prevent 'unable to open database file' errors
+        try:
+            db_file.parent.mkdir(parents=True, exist_ok=True)
+        except Exception as e:
+            logging.error(f"Failed to create database directory {db_file.parent}: {e}")
+            
+        return sqlite3.connect(str(db_file))
 
     def execute_script(self, script: str) -> None:
         """Executes a block of SQL script (multiple statements)."""
