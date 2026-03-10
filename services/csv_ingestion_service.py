@@ -10,10 +10,37 @@ EXPECTED_COLUMNS = ["ComputerName", "UserName", "InstallScope", "DisplayName", "
 OLD_EXPECTED_COLUMNS = ["ComputerName", "UserName", "DisplayName", "DisplayVersion", "Publisher"]
 
 class CsvIngestionService:
-    """Service orchestrating the parsing and ingestion of workspace CSV data."""
+    """Service orchestrating the parsing and ingestion of workspace CSV data.
+
+    Owns the software_inventory schema; creates the table on construction so
+    callers do not need an external schema-setup step.
+    """
 
     def __init__(self, db_adapter: DbAdapter):
         self.db = db_adapter
+        self._ensure_schema()
+
+    def _ensure_schema(self) -> None:
+        """Creates the software_inventory table and supporting index if absent."""
+        self.db.execute_script("""
+            CREATE TABLE IF NOT EXISTS software_inventory (
+                id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+                computer_name        TEXT,
+                user_name            TEXT,
+                raw_display_name     TEXT,
+                raw_display_version  TEXT,
+                publisher            TEXT,
+                normalized_name      TEXT,
+                normalized_version   TEXT,
+                sccm_package_id      TEXT,
+                group_id             TEXT,
+                needs_review         INTEGER DEFAULT 1,
+                install_scope        TEXT,
+                install_date         TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_normalized_name
+                ON software_inventory (normalized_name);
+        """)
 
     def process_csvs_from_folder(self, folder_path: str) -> pd.DataFrame:
         """Reads all CSVs in a folder and returns a unified DataFrame."""
