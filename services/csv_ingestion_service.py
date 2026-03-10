@@ -21,7 +21,13 @@ class CsvIngestionService:
         self._ensure_schema()
 
     def _ensure_schema(self) -> None:
-        """Creates the software_inventory table and supporting index if absent."""
+        """Creates or migrates the software_inventory table to the current schema.
+
+        Handles existing databases that were created with an older column layout by
+        adding any missing columns before attempting index creation.
+        """
+        # Create the table with the full schema if it does not yet exist.
+        # If the table already exists (older schema), this is a no-op.
         self.db.execute_script("""
             CREATE TABLE IF NOT EXISTS software_inventory (
                 id                   INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -38,6 +44,27 @@ class CsvIngestionService:
                 install_scope        TEXT,
                 install_date         TEXT
             );
+        """)
+
+        # Migrate older schema versions by adding columns that may not yet exist.
+        # ALTER TABLE ADD COLUMN is a no-op if the column is already present.
+        for column, col_type in [
+            ("normalized_name", "TEXT"),
+            ("normalized_version", "TEXT"),
+            ("sccm_package_id", "TEXT"),
+            ("group_id", "TEXT"),
+            ("needs_review", "INTEGER DEFAULT 1"),
+            ("install_scope", "TEXT"),
+            ("install_date", "TEXT"),
+        ]:
+            try:
+                self.db.execute_query(
+                    f"ALTER TABLE software_inventory ADD COLUMN {column} {col_type}"
+                )
+            except Exception:
+                pass  # Column already exists in this database.
+
+        self.db.execute_script("""
             CREATE INDEX IF NOT EXISTS idx_normalized_name
                 ON software_inventory (normalized_name);
         """)
