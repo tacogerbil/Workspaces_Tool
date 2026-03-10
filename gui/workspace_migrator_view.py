@@ -14,10 +14,10 @@ from adapters.config_adapter import ConfigAdapter
 
 class WorkspaceMigratorView(QWidget):
     """PySide6 implementation of the Workspace Migrator."""
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, workspace_service=None):
         super().__init__(parent)
         self.threadpool = QThreadPool()
-        self.config_adapter = ConfigAdapter()
+        self.workspace_service = workspace_service
         
         self._setup_ui()
         self.load_templates()
@@ -72,25 +72,29 @@ class WorkspaceMigratorView(QWidget):
         log_layout.addWidget(self.txt_log)
         main_layout.addWidget(log_group, stretch=1)
         
-        # Populate demo table
-        self._populate_demo_table()
+        # Populate table
+        self._populate_workspaces_table()
 
     def load_templates(self):
         self.template_combo.clear()
-        self.template_combo.addItems(["Template A - Std", "Template B - Perf", "Template C - Graphic"])
+        if not self.workspace_service: return
+        self.templates = self.workspace_service.get_workspace_templates()
+        self.template_combo.addItems([t['TemplateName'] for t in self.templates])
 
-    def _populate_demo_table(self):
-        # Add checkbox rows
-        for i in range(5):
+    def _populate_workspaces_table(self):
+        if not self.workspace_service: return
+        workspaces = self.workspace_service.get_live_workspaces_for_migration()
+        
+        for ws in workspaces:
             chk_item = QStandardItem("")
             chk_item.setCheckable(True)
-            user_item = QStandardItem(f"user_{i}")
-            comp_item = QStandardItem("Acme Corp")
-            exist_item = QStandardItem("120")
-            inact_item = QStandardItem("10")
-            stat_item = QStandardItem("AVAILABLE")
-            name_item = QStandardItem(f"WS-00{i}")
-            dir_item = QStandardItem("d-9267234aa")
+            user_item = QStandardItem(ws.get('UserName', 'Unknown'))
+            comp_item = QStandardItem(ws.get('ComputerName', 'Unknown'))
+            exist_item = QStandardItem(str(ws.get('DaysInExistence', 0)))
+            inact_item = QStandardItem(str(ws.get('DaysInactive', 0)))
+            stat_item = QStandardItem(ws.get('migration_status', 'AVAILABLE'))
+            name_item = QStandardItem(ws.get('WorkspaceId', 'Unknown'))
+            dir_item = QStandardItem(ws.get('DirectoryId', 'Unknown'))
             
             self.model_workspaces.appendRow([chk_item, user_item, comp_item, exist_item, inact_item, stat_item, name_item, dir_item])
 

@@ -18,6 +18,8 @@ from gui.sccm_mapper_view import SccmMapperView
 from gui.workspace_creator_view import WorkspaceCreatorView
 from gui.workspace_migrator_view import WorkspaceMigratorView
 from gui.dashboard_view import DashboardView
+from adapters.db_adapter import DbAdapter
+from services.aws_ad_workspace_service import AwsAdWorkspaceService
 
 class UnifiedMainWindow(QMainWindow):
     """The central unified window for the Workspaces Application."""
@@ -33,6 +35,11 @@ class UnifiedMainWindow(QMainWindow):
             self.resize(int(w), int(h))
         except ValueError:
             self.resize(1400, 900)
+            
+        # Initialize Backend Services strictly via MCCC interfaces
+        db_path = self.config_adapter.get_monitor_db_path() or 'monitoring.db'
+        self.db_adapter = DbAdapter(db_path)
+        self.workspace_service = AwsAdWorkspaceService(self.db_adapter, self.config_adapter)
             
         self._setup_ui()
 
@@ -56,8 +63,8 @@ class UnifiedMainWindow(QMainWindow):
         # Assemble Real Views into Tabs
         self.tabs.addTab(DashboardView(), "Dashboard")
         self.tabs.addTab(SccmMapperView(), "SCCM Mapper")
-        self.tabs.addTab(WorkspaceCreatorView(), "Workspace Creator")
-        self.tabs.addTab(WorkspaceMigratorView(), "Workspace Migrator")
+        self.tabs.addTab(WorkspaceCreatorView(workspace_service=self.workspace_service), "Workspace Creator")
+        self.tabs.addTab(WorkspaceMigratorView(workspace_service=self.workspace_service), "Workspace Migrator")
 
     def _setup_placeholder(self, parent_widget, text):
         layout = QVBoxLayout(parent_widget)

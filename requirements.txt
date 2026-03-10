@@ -10,3 +10,4 @@ pyqtgraph
 pyqtdarktheme
 ldap3
 flask
+boto3

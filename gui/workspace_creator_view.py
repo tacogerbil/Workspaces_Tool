@@ -14,10 +14,10 @@ from adapters.config_adapter import ConfigAdapter
 
 class WorkspaceCreatorView(QWidget):
     """PySide6 implementation of the Workspace Creator."""
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, workspace_service=None):
         super().__init__(parent)
         self.threadpool = QThreadPool()
-        self.config_adapter = ConfigAdapter()
+        self.workspace_service = workspace_service
         self.user_rows = []
         
         self._setup_ui()
@@ -111,9 +111,12 @@ class WorkspaceCreatorView(QWidget):
         self.user_rows.append({"widget": row_widget, "user": user_input, "mode": mode_combo})
 
     def load_templates(self):
-        """Simulate loading templates."""
+        """Load real templates from DB."""
         self.template_combo.clear()
-        self.template_combo.addItems(["Developer Standard", "Power User", "Basic Desktop"])
+        if not self.workspace_service: return
+        
+        self.templates = self.workspace_service.get_workspace_templates()
+        self.template_combo.addItems([t['TemplateName'] for t in self.templates])
 
     def _open_template_manager(self):
         dialog = QDialog(self)
@@ -139,13 +142,8 @@ class WorkspaceCreatorView(QWidget):
         self.threadpool.start(worker)
 
     def _perform_validation(self, users):
-        # Simulate AD Check
-        import time
-        time.sleep(1)
-        results = {}
-        for u in users:
-            results[u] = "VALID" if "test" not in u.lower() else "NOT FOUND"
-        return results
+        if not self.workspace_service: return {u: "NO SERVICE" for u in users}
+        return self.workspace_service.validate_ad_users(users)
 
     def _on_validation_result(self, results):
         self.txt_validation.clear()
@@ -177,12 +175,45 @@ class WorkspaceCreatorView(QWidget):
         self.txt_log.append("Starting workspace creation process...\n")
         self.btn_create.setEnabled(False)
         
-        worker = ServiceWorker(self._perform_creation)
-        worker.signals.result.connect(lambda msg: self.txt_log.append(msg))
+        selected_template_name = self.template_combo.currentText()
+        template = next((t for t in getattr(self, 'templates', []) if t['TemplateName'] == selected_template_name), None)
+        
+        if not template:
+            self.txt_log.append("ERROR: Invalid template selected.\n")
+            self.btn_create.setEnabled(True)
+            return
+
+        creation_requests = []
+        for row in self.user_rows:
+            user = row["user"].text().strip()
+            mode = row["mode"].currentText()
+            if not user: continue
+            
+            creation_requests.append({
+                'DirectoryId': template['DirectoryId'],
+                'UserName': user,
+                'BundleId': template['BundleId'],
+                'VolumeEncryptionKey': template.get('VolumeEncryptionKey', ''),
+                'WorkspaceProperties': {
+                    'RunningMode': mode,
+                    'RootVolumeSizeGib': template.get('RootVolumeSizeGib', 80),
+                    'UserVolumeSizeGib': template.get('UserVolumeSizeGib', 50),
+                    'ComputeTypeName': template.get('ComputeTypeName', 'VALUE')
+                }
+            })
+
+        worker = ServiceWorker(self._perform_creation, creation_requests)
+        worker.signals.result.connect(self._on_creation_stream)
         worker.signals.finished.connect(lambda: self.btn_create.setEnabled(True))
         self.threadpool.start(worker)
 
-    def _perform_creation(self):
-        import time
-        time.sleep(2)
-        return "All workspaces successfully queued for creation via AWS API."
+    def _on_creation_stream(self, generator):
+        if not generator: return
+        for username, status, _ in generator:
+            self.txt_log.append(f"User: {username} -> {status}")
+        self.txt_log.append("\n--- Creation API Request Complete ---")
+
+    def _perform_creation(self, requests):
+        if not self.workspace_service: return []
+        # Return the generator itself, allowing streaming
+        return self.workspace_service.create_workspaces(requests)
