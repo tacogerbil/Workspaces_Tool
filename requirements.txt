@@ -1,0 +1,12 @@
+pandas
+rapidfuzz
+cryptography
+pyodbc
+WMI
+pywin32
+packaging
+PySide6
+pyqtgraph
+pyqtdarktheme
+ldap3
+flask
