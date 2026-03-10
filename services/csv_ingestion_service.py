@@ -47,8 +47,14 @@ class CsvIngestionService:
         """)
 
         # Migrate older schema versions by adding columns that may not yet exist.
-        # ALTER TABLE ADD COLUMN is a no-op if the column is already present.
+        # Covers DBs created by the original gui_database_setup.py which used
+        # DisplayName/DisplayVersion and lacked the normalized/review columns.
         for column, col_type in [
+            ("computer_name", "TEXT"),
+            ("user_name", "TEXT"),
+            ("raw_display_name", "TEXT"),
+            ("raw_display_version", "TEXT"),
+            ("publisher", "TEXT"),
             ("normalized_name", "TEXT"),
             ("normalized_version", "TEXT"),
             ("sccm_package_id", "TEXT"),

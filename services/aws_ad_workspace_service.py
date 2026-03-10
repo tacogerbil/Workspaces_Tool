@@ -50,8 +50,42 @@ class AwsAdWorkspaceService(WorkspaceServiceProtocol):
     # ---------------------------------------------------------------------------
 
     def _ensure_tables(self) -> None:
-        """Creates the workspace_templates table if it does not already exist."""
+        """Creates all monitoring and template tables if they do not already exist.
+
+        Mirrors the schema from the original Workspaces_Query.py initialisation block,
+        including the migration_status column added by database_setup.py.
+        """
         self.db.execute_script("""
+            CREATE TABLE IF NOT EXISTS workspaces (
+                WorkspaceId          TEXT PRIMARY KEY,
+                ComputerName         TEXT,
+                UserName             TEXT,
+                AWSStatus            TEXT,
+                DaysInactive         INTEGER,
+                RunningMode          TEXT,
+                ComputeType          TEXT,
+                RootVolumeSize       INTEGER,
+                UserVolumeSize       INTEGER,
+                OriginalCreationDate TEXT,
+                LastSeenDate         TEXT,
+                DirectoryId          TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS ad_users (
+                UserName      TEXT PRIMARY KEY,
+                FullName      TEXT,
+                UserADStatus  TEXT,
+                Email         TEXT,
+                Company       TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS ad_devices (
+                ComputerName  TEXT PRIMARY KEY,
+                Description   TEXT,
+                CreationDate  TEXT,
+                DeviceADStatus TEXT
+            );
+
             CREATE TABLE IF NOT EXISTS workspace_templates (
                 TemplateName        TEXT PRIMARY KEY,
                 DirectoryId         TEXT NOT NULL,
@@ -63,6 +97,14 @@ class AwsAdWorkspaceService(WorkspaceServiceProtocol):
                 ComputeTypeName     TEXT
             );
         """)
+
+        # Add migration_status if this DB was created before database_setup.py ran.
+        try:
+            self.db.execute_query(
+                "ALTER TABLE workspaces ADD COLUMN migration_status TEXT DEFAULT 'Pending'"
+            )
+        except Exception:
+            pass  # Column already exists.
 
     # ---------------------------------------------------------------------------
     # Template CRUD
