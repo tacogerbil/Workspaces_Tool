@@ -33,10 +33,12 @@ from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
     QCheckBox,
+    QFileDialog,
     QGroupBox,
     QHBoxLayout,
     QLabel,
     QMenu,
+    QMessageBox,
     QProgressBar,
     QPushButton,
     QTreeView,
@@ -59,6 +61,7 @@ from core.dashboard_columns import (
     build_archived_query,
     enrich_dataframe,
 )
+from gui.column_config_dialog import ColumnConfigDialog
 from services.workspace_data_processor import load_aliases, load_pricing_data
 
 _STATUS_LABELS = ["AVAILABLE", "ERROR", "PENDING", "STARTING", "STOPPED"]
@@ -190,6 +193,16 @@ class DashboardView(QWidget):
         self._btn_reload_aliases.setFixedHeight(32)
         self._btn_reload_aliases.clicked.connect(self._reload_aliases)
 
+        self._btn_columns = QPushButton("⚙ Columns…")
+        self._btn_columns.setFixedHeight(32)
+        self._btn_columns.setToolTip("Choose which columns are visible and their order")
+        self._btn_columns.clicked.connect(self._open_column_config)
+
+        self._btn_export = QPushButton("📥 Export Excel")
+        self._btn_export.setFixedHeight(32)
+        self._btn_export.setToolTip("Export current view to Excel (.xlsx)")
+        self._btn_export.clicked.connect(self._export_to_excel)
+
         self._chk_archived = QCheckBox("Show Archived")
         self._chk_archived.stateChanged.connect(self._on_archive_toggle)
 
@@ -202,6 +215,8 @@ class DashboardView(QWidget):
 
         toolbar.addWidget(self._btn_refresh)
         toolbar.addWidget(self._btn_reload_aliases)
+        toolbar.addWidget(self._btn_columns)
+        toolbar.addWidget(self._btn_export)
         toolbar.addWidget(self._chk_archived)
         toolbar.addWidget(self._progress, 1)
         toolbar.addWidget(self._status_label)
@@ -246,7 +261,22 @@ class DashboardView(QWidget):
         # Apply standard Dashboard Font
         font = QFont("Segoe UI", 9)
         self._tree.setFont(font)
-        self._tree.setStyleSheet("QTreeView::item { padding: 4px; }")
+        self._tree.setMouseTracking(True)
+        self._tree.setStyleSheet("""
+            QTreeView::item { padding: 4px; }
+            QTreeView::item:selected {
+                background-color: #0078D7;
+                color: white;
+            }
+            QTreeView::item:hover:!selected {
+                background-color: #CCE4FF;
+                color: black;
+            }
+            QTreeView::item:selected:hover {
+                background-color: #005FA3;
+                color: white;
+            }
+        """)
 
         # Proxy model for sort persistence across refreshes
         self._source_model = QStandardItemModel()
@@ -352,6 +382,55 @@ class DashboardView(QWidget):
     def _on_archive_toggle(self, state: int) -> None:
         self._show_archived = self._chk_archived.isChecked()
         self._refresh_from_db()
+
+    def _open_column_config(self) -> None:
+        dlg = ColumnConfigDialog(
+            available_columns=list(COLUMN_REGISTRY.keys()),
+            active_columns=self._active_columns,
+            registry=COLUMN_REGISTRY,
+            parent=self,
+        )
+        if dlg.exec() != ColumnConfigDialog.Accepted:
+            return
+        new_cols = dlg.selected_columns()
+        if not new_cols:
+            return
+        self._active_columns = new_cols
+        if self._config:
+            self._config.set_dashboard_columns(new_cols)
+        self._refresh_from_db()
+
+    def _export_to_excel(self) -> None:
+        if self._source_model.rowCount() == 0:
+            QMessageBox.information(self, "Export", "No data to export.")
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Export to Excel", "workspaces_export.xlsx",
+            "Excel Files (*.xlsx)"
+        )
+        if not path:
+            return
+        col_count = self._source_model.columnCount()
+        headers = [
+            self._source_model.horizontalHeaderItem(c).text()
+            for c in range(col_count)
+        ]
+        rows = [
+            [self._source_model.item(r, c).text() for c in range(col_count)]
+            for r in range(self._source_model.rowCount())
+        ]
+        try:
+            df = pd.DataFrame(rows, columns=headers)
+            df.to_excel(path, index=False)
+            self._status_label.setText(f"Exported {len(rows)} rows to {path}")
+        except ImportError:
+            QMessageBox.critical(
+                self, "Export Failed",
+                "openpyxl is required.\n\nRun: pip install openpyxl"
+            )
+        except Exception as exc:
+            logging.error("Excel export failed: %s", exc)
+            QMessageBox.critical(self, "Export Failed", str(exc))
 
     # ------------------------------------------------------------------
     # DB read — the only place SQL is executed in this file

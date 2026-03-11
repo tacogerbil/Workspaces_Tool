@@ -159,7 +159,6 @@ COLUMN_REGISTRY: dict[str, ColumnDef] = {
         sql_alias="DirectoryId",
         archived_sql_expr="ha.DirectoryId",
     ),
-
     # ── AD device columns ───────────────────────────────────────────────────
 
     "DeviceADStatus": ColumnDef(
@@ -263,11 +262,18 @@ COLUMN_REGISTRY: dict[str, ColumnDef] = {
     ),
 }
 
-# Columns shown by default when the user has no saved preference
+# Columns shown by default when the user has no saved preference.
+# Matches parity plan — explicit list, not derived from is_visible_by_default.
 DEFAULT_DASHBOARD_COLUMNS: list[str] = [
-    col_id
-    for col_id, defn in COLUMN_REGISTRY.items()
-    if defn.is_visible_by_default
+    "AWSStatus",
+    "UserName",
+    "Company",
+    "Notes",
+    "ComputerName",
+    "DaysInactive",
+    "OwnershipCost",
+    "NonUsageCost",
+    "UserADStatus",
 ]
 
 
