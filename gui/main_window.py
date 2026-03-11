@@ -8,7 +8,6 @@ user's per-profile config.ini — no hard-coded paths or server names.
 
 from __future__ import annotations
 
-import base64
 import logging
 import os
 import sys
@@ -138,15 +137,26 @@ class UnifiedMainWindow(QMainWindow):
     # ------------------------------------------------------------------
 
     def _build_encryptor(self) -> DataEncryptor | None:
-        """Derives the Fernet key from the stored salt + master password."""
+        """Derives the Fernet key from the <db_path>.salt file + master password.
+
+        The salt lives in a binary file named <db_path>.salt next to the database,
+        identical to how the original app created it.  If the file is missing a new
+        one is generated in the same location.  The salt is never stored in config.ini.
+        """
         try:
-            salt_b64 = self.config_adapter.get_salt()
-            if salt_b64:
-                salt = base64.urlsafe_b64decode(salt_b64.encode())
+            from pathlib import Path
+            db_path = self.config_adapter.get_monitor_db_path()
+            if not db_path:
+                logging.error("Cannot build encryptor: no DB path configured.")
+                return None
+            salt_file = Path(db_path + ".salt")
+            if salt_file.exists():
+                salt = salt_file.read_bytes()
+                logging.info(f"Salt loaded from {salt_file}.")
             else:
                 salt = os.urandom(16)
-                self.config_adapter.set_salt(base64.urlsafe_b64encode(salt).decode())
-                logging.info("New encryption salt generated and stored.")
+                salt_file.write_bytes(salt)
+                logging.info(f"New salt created at {salt_file}.")
             return DataEncryptor(self._db_password, salt)
         except Exception as exc:
             logging.error(f"Encryptor init failed: {exc}", exc_info=True)

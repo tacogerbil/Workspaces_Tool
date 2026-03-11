@@ -96,10 +96,16 @@ class _SyncWorker(QRunnable):
     def run(self) -> None:
         try:
             msg = self._service.process_and_store_data(self._mode)
-            self.signals.finished.emit(msg)
+            try:
+                self.signals.finished.emit(msg)
+            except RuntimeError:
+                pass  # receiver was destroyed before sync completed — safe to ignore
         except Exception as exc:
             logging.error("Dashboard sync failed: %s", exc, exc_info=True)
-            self.signals.error.emit(str(exc))
+            try:
+                self.signals.error.emit(str(exc))
+            except RuntimeError:
+                pass  # receiver was destroyed — safe to ignore
 
 
 # ---------------------------------------------------------------------------

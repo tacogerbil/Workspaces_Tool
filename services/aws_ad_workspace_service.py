@@ -754,7 +754,13 @@ class AwsAdWorkspaceService:
         df = self._db.read_sql("SELECT * FROM workspace_templates ORDER BY TemplateName")
         templates = df.to_dict("records") if not df.empty else []
         for t in templates:
-            t["VolumeEncryptionKey"] = self._decrypt(t.get("VolumeEncryptionKey"))
+            raw = t.get("VolumeEncryptionKey")
+            try:
+                t["VolumeEncryptionKey"] = self._decrypt(raw)
+            except Exception:
+                # Decryption failed (wrong password or stale salt) — keep raw value
+                # rather than crashing the whole application on startup.
+                t["VolumeEncryptionKey"] = raw
         return templates
 
     def save_workspace_template(self, data: Dict, is_new: bool) -> bool:

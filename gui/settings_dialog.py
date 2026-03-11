@@ -81,12 +81,16 @@ class SettingsDialog(QDialog):
         main_layout.addLayout(btn_layout)
 
     def _browse_db(self):
-        path, _ = QFileDialog.getOpenFileName(self, "Select Monitoring Database", "", "SQLite DB (*.db *.sqlite);;All Files (*)")
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Select or Create Monitoring Database", "", "SQLite DB (*.db *.sqlite);;All Files (*)"
+        )
         if path:
             self.db_path_input.setText(path)
 
     def _browse_sccm(self):
-        path, _ = QFileDialog.getOpenFileName(self, "Select SCCM Database", "", "SQLite DB (*.db *.sqlite);;All Files (*)")
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Select or Create SCCM Database", "", "SQLite DB (*.db *.sqlite);;All Files (*)"
+        )
         if path:
             self.sccm_path_input.setText(path)
 
