@@ -49,8 +49,7 @@ CREATE TABLE IF NOT EXISTS workspaces (
     UserVolumeSize INTEGER,
     OriginalCreationDate TEXT,
     LastSeenDate TEXT,
-    DirectoryId TEXT,
-    migration_status TEXT DEFAULT 'Pending'
+    DirectoryId TEXT
 );
 CREATE TABLE IF NOT EXISTS ad_devices (
     ComputerName TEXT PRIMARY KEY,
@@ -138,8 +137,7 @@ _MSSQL_TABLE_DEFS: List[Tuple[str, str]] = [
         [UserVolumeSize] INT,
         [OriginalCreationDate] NVARCHAR(32),
         [LastSeenDate] NVARCHAR(32),
-        [DirectoryId] NVARCHAR(64),
-        [migration_status] NVARCHAR(64) DEFAULT 'Pending'
+        [DirectoryId] NVARCHAR(64)
     )"""),
     ("ad_devices", """CREATE TABLE [ad_devices] (
         [ComputerName] NVARCHAR(255) PRIMARY KEY,

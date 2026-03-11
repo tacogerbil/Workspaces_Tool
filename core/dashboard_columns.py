@@ -159,12 +159,6 @@ COLUMN_REGISTRY: dict[str, ColumnDef] = {
         sql_alias="DirectoryId",
         archived_sql_expr="ha.DirectoryId",
     ),
-    "migration_status": ColumnDef(
-        display_name="Migration Status",
-        sql_expr="w.migration_status",
-        sql_alias="migration_status",
-        is_visible_by_default=True,
-    ),
 
     # ── AD device columns ───────────────────────────────────────────────────
 

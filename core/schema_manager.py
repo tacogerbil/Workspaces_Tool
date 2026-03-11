@@ -69,7 +69,6 @@ WORKSPACES_COLUMNS: list[ColSpec] = [
     ColSpec("OriginalCreationDate", "TEXT"),        # "YYYY-MM-DD"
     ColSpec("LastSeenDate",         "TEXT"),        # "YYYY-MM-DD", updated each sync
     ColSpec("DirectoryId",          "TEXT"),
-    ColSpec("migration_status",     "TEXT", default="Pending"),  # lowercase — matches DDL
 ]
 
 AD_DEVICES_COLUMNS: list[ColSpec] = [

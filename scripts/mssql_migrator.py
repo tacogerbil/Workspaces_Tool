@@ -60,8 +60,7 @@ _MSSQL_DDLS = {
             [UserVolumeSize] INT,
             [OriginalCreationDate] NVARCHAR(32),
             [LastSeenDate] NVARCHAR(32),
-            [DirectoryId] NVARCHAR(64),
-            [migration_status] NVARCHAR(64) DEFAULT 'Pending'
+            [DirectoryId] NVARCHAR(64)
         )""",
     "ad_devices": """
         CREATE TABLE [ad_devices] (

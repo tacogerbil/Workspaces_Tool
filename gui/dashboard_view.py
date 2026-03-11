@@ -237,7 +237,7 @@ class DashboardView(QWidget):
         grid_layout = QVBoxLayout(grid_group)
         self._tree = QTreeView()
         self._tree.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        self._tree.setAlternatingRowColors(True)
+        self._tree.setAlternatingRowColors(False)  # Let company banding handle backgrounds
         self._tree.setSortingEnabled(True)
         self._tree.setContextMenuPolicy(Qt.CustomContextMenu)
         self._tree.customContextMenuRequested.connect(self._on_right_click)

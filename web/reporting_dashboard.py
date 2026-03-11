@@ -32,7 +32,7 @@ HTML_TEMPLATE = """
   <head>
     <meta charset="utf-g">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Workspace Migration Dashboard</title>
+    <title>AWS Workspace Status Dashboard</title>
     <style>
       body { font-family: sans-serif; margin: 2em; background-color: #f4f4f9; }
       h1 { color: #333; }
@@ -40,21 +40,21 @@ HTML_TEMPLATE = """
       th, td { padding: 12px; border: 1px solid #ddd; text-align: left; }
       th { background-color: #4CAF50; color: white; }
       tr:nth-child(even) { background-color: #f2f2f2; }
-     .status-pending { color: #808080; }
-     .status-inprogress { color: #ffa500; font-weight: bold; }
-     .status-completed { color: #4CAF50; font-weight: bold; }
-     .status-failed { color: #d9534f; font-weight: bold; }
+     .status-stopped { color: #808080; }
+     .status-starting { color: #ffa500; font-weight: bold; }
+     .status-available { color: #4CAF50; font-weight: bold; }
+     .status-error { color: #d9534f; font-weight: bold; }
     </style>
     <meta http-equiv="refresh" content="30">
   </head>
   <body>
-    <h1>AWS Workspace Migration Status</h1>
+    <h1>AWS Workspace Status</h1>
     <table>
       <thead>
         <tr>
           <th>Workspace ID</th>
           <th>User Name</th>
-          <th>Status</th>
+          <th>AWS Status</th>
         </tr>
       </thead>
       <tbody>
@@ -62,7 +62,7 @@ HTML_TEMPLATE = """
         <tr>
           <td>{{ workspace['WorkspaceId'] }}</td>
           <td>{{ workspace['UserName'] }}</td>
-          <td class="status-{{ workspace['migration_status'].lower().replace(' ', '-') }}">{{ workspace['migration_status'] }}</td>
+          <td class="status-{{ workspace['AWSStatus'].lower() if workspace['AWSStatus'] else 'unknown' }}">{{ workspace['AWSStatus'] }}</td>
         </tr>
         {% endfor %}
       </tbody>
@@ -74,7 +74,7 @@ HTML_TEMPLATE = """
 @app.route('/')
 def index():
     conn = get_db_connection(MONITOR_DB)
-    workspaces = conn.execute('SELECT WorkspaceId, UserName, migration_status FROM workspaces ORDER BY UserName').fetchall()
+    workspaces = conn.execute('SELECT WorkspaceId, UserName, AWSStatus FROM workspaces ORDER BY UserName').fetchall()
     conn.close()
     return render_template_string(HTML_TEMPLATE, workspaces=workspaces)
 
