@@ -241,6 +241,12 @@ class DashboardView(QWidget):
         self._tree.setSortingEnabled(True)
         self._tree.setContextMenuPolicy(Qt.CustomContextMenu)
         self._tree.customContextMenuRequested.connect(self._on_right_click)
+        self._tree.doubleClicked.connect(self._on_double_click)
+        
+        # Apply standard Dashboard Font
+        font = QFont("Segoe UI", 9)
+        self._tree.setFont(font)
+        self._tree.setStyleSheet("QTreeView::item { padding: 4px; }")
 
         # Proxy model for sort persistence across refreshes
         self._source_model = QStandardItemModel()
@@ -342,7 +348,7 @@ class DashboardView(QWidget):
         self._refresh_from_db()
 
     def _on_archive_toggle(self, state: int) -> None:
-        self._show_archived = state == Qt.Checked
+        self._show_archived = self._chk_archived.isChecked()
         self._refresh_from_db()
 
     # ------------------------------------------------------------------
@@ -501,8 +507,8 @@ class DashboardView(QWidget):
         record_type = row.get("RecordType", "LIVE")
 
         if record_type == "ARCHIVED":
-            grey = QColor("#888888")
-            fnt = QFont()
+            grey = QColor("grey")
+            fnt = QFont("Segoe UI", 9)
             fnt.setItalic(True)
             for item in items:
                 item.setForeground(grey)
@@ -513,6 +519,7 @@ class DashboardView(QWidget):
             phantom_bg = QColor("#FFDDC1")
             for item in items:
                 item.setBackground(phantom_bg)
+                item.setForeground(QColor("black"))
             return
 
         # LIVE row color rules.
@@ -540,6 +547,7 @@ class DashboardView(QWidget):
         if device_status == "MISSING_IN_AD":
             for item in items:
                 item.setBackground(QColor("#FFEBE6"))
+                item.setForeground(QColor("black"))
             return
 
         # Company banding (default live rows)
@@ -548,6 +556,7 @@ class DashboardView(QWidget):
             color = self._company_color(company)
             for item in items:
                 item.setBackground(color)
+                item.setForeground(QColor("black"))
 
     def _company_color(self, company: str) -> QColor:
         if company not in self._company_colors:
@@ -568,11 +577,58 @@ class DashboardView(QWidget):
             return
         value = index.data(Qt.DisplayRole) or ""
         menu = QMenu(self)
-        action = menu.addAction(f"Copy: {value[:60]}")
+        action = menu.addAction(f"Copy: {str(value)[:60]}")
         action.triggered.connect(
             lambda: QApplication.clipboard().setText(str(value))
         )
         menu.exec(self._tree.viewport().mapToGlobal(pos))
+
+    def _on_double_click(self, proxy_index) -> None:
+        if not proxy_index.isValid(): return
+        
+        # Determine exactly which column was clicked
+        col_id = self._active_columns[proxy_index.column()]
+        if col_id != "Notes":
+            return
+            
+        # We need the username to update the note
+        try:
+            user_col_idx = self._active_columns.index("UserName")
+            user_index = proxy_index.siblingAtColumn(user_col_idx)
+            username = str(user_index.data(Qt.DisplayRole))
+        except ValueError:
+            return  # UserName column isn't visible, can't reliably update
+            
+        current_note = str(proxy_index.data(Qt.DisplayRole) or "")
+        
+        # Late import to avoid circular dependencies
+        from PySide6.QtWidgets import QInputDialog, QLineEdit
+        new_note, ok = QInputDialog.getMultiLineText(
+            self, f"Edit Note for {username}",
+            "Enter new note:", current_note
+        )
+        
+        if ok:
+            try:
+                # Update in DB
+                self._db.execute_query(
+                    "UPDATE ad_users SET Notes=? WHERE UserName=?", (new_note, username)
+                )
+                
+                # Also blindly update the historical_archives table if they click an archived note
+                # (since old app didn't explicitly separate them in the DB save)
+                self._db.execute_query(
+                    "UPDATE historical_archives SET Notes=? WHERE UserName=?", (new_note, username)
+                )
+                
+                # Instantly reflect in the visual model
+                source_index = self._proxy.mapToSource(proxy_index)
+                self._source_model.itemFromIndex(source_index).setText(new_note)
+                self._status_label.setText(f"Note updated for {username}.")
+            except Exception as e:
+                logging.error(f"Failed to update note: {e}")
+                
+
 
     # ------------------------------------------------------------------
     # Ctrl+C — copy selected rows as TSV
