@@ -9,6 +9,8 @@ if current_dir not in sys.path:
     sys.path.insert(0, current_dir)
 
 import logging
+from adapters.config_adapter import ConfigAdapter
+from gui.settings_dialog import SettingsDialog
 from gui.main_window import UnifiedMainWindow
 
 # Configure logging
@@ -20,6 +22,22 @@ def main():
     
     # Apply modern dark theme
     qdarktheme.setup_theme(corner_shape="rounded")
+
+    # --- Check for missing configuration ---
+    config_adapter = ConfigAdapter()
+    ad_cfg = config_adapter.get_ad_config()
+    db_cfg = config_adapter.get_db_backend_config()
+    
+    # If the core DB path or AD server is missing, force the Settings dialog first
+    if not ad_cfg.get("server") or not db_cfg.get("path"):
+        setup_dialog = SettingsDialog(config_adapter, is_setup_mode=True)
+        setup_dialog.exec()
+        
+        # Re-check. If they canceled the setup without saving mandatory fields, abort.
+        ad_cfg = config_adapter.get_ad_config()
+        if not ad_cfg.get("server"):
+            QMessageBox.critical(None, "Aborted", "Configuration setup was incomplete. Exiting application.")
+            sys.exit(1)
 
     # --- Replicate original startup credential prompts ---
     db_password, ok = QInputDialog.getText(None, "Unlock Database", "Enter Master Password to decrypt Database and Config:", QLineEdit.Password)

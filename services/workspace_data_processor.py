@@ -229,6 +229,7 @@ def fetch_ad_data(
 
     tls_config = Tls(validate=ssl.CERT_NONE, version=ssl.PROTOCOL_TLSv1_2)
     server = Server(ad_server, use_ssl=True, tls=tls_config, get_info=ALL, connect_timeout=10)
+    logging.info(f"Attempting AD bind - Server: '{ad_server}', User: '{ad_user}', PwdLen: {len(ad_password)}")
     conn = Connection(server, user=ad_user, password=ad_password, auto_bind=True, read_only=True)
     if not conn.bound:
         raise ConnectionError(f"LDAP bind failed for server '{ad_server}'.")

@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+from PySide6.QtGui import QAction
 
 # Ensure the execution/ directory is on sys.path regardless of the CWD
 _here = os.path.dirname(os.path.abspath(__file__))
@@ -41,6 +42,7 @@ from gui.workspace_migrator_view import WorkspaceMigratorView
 from services.aws_ad_workspace_service import AwsAdWorkspaceService
 from services.csv_ingestion_service import CsvIngestionService
 from services.sccm_sync_service import SccmSyncService
+from gui.settings_dialog import SettingsDialog
 
 
 class UnifiedMainWindow(QMainWindow):
@@ -155,6 +157,7 @@ class UnifiedMainWindow(QMainWindow):
     # ------------------------------------------------------------------
 
     def _setup_ui(self) -> None:
+        self._setup_menu()
         central = QWidget(self)
         self.setCentralWidget(central)
         root = QVBoxLayout(central)
@@ -204,9 +207,24 @@ class UnifiedMainWindow(QMainWindow):
 
         tabs.addTab(
             WorkspaceCreatorView(workspace_service=self.workspace_service),
-            "➕ Workspace Creator",
+            "🆕 Creator",
         )
         tabs.addTab(
             PreferencesView(config=self.config_adapter),
             "⚙ Preferences",
         )
+
+        self._apply_saved_geometry()
+
+    def _setup_menu(self) -> None:
+        menubar = self.menuBar()
+        file_menu = menubar.addMenu("&File")
+
+        settings_action = QAction("&Settings", self)
+        settings_action.setStatusTip("Configure AD, AWS, and Database settings")
+        settings_action.triggered.connect(self._open_settings)
+        file_menu.addAction(settings_action)
+
+    def _open_settings(self) -> None:
+        dialog = SettingsDialog(self.config_adapter, self)
+        dialog.exec()
