@@ -649,7 +649,10 @@ class AwsAdWorkspaceService:
     def _decrypt(self, value: Optional[str]) -> Optional[str]:
         if not value or not self._encryptor:
             return value
-        return self._encryptor.decrypt_data(value)
+        try:
+            return self._encryptor.decrypt_data(value)
+        except Exception:
+            return value
 
     # ------------------------------------------------------------------
     # User note
@@ -754,13 +757,7 @@ class AwsAdWorkspaceService:
         df = self._db.read_sql("SELECT * FROM workspace_templates ORDER BY TemplateName")
         templates = df.to_dict("records") if not df.empty else []
         for t in templates:
-            raw = t.get("VolumeEncryptionKey")
-            try:
-                t["VolumeEncryptionKey"] = self._decrypt(raw)
-            except Exception:
-                # Decryption failed (wrong password or stale salt) — keep raw value
-                # rather than crashing the whole application on startup.
-                t["VolumeEncryptionKey"] = raw
+            t["VolumeEncryptionKey"] = self._decrypt(t.get("VolumeEncryptionKey"))
         return templates
 
     def save_workspace_template(self, data: Dict, is_new: bool) -> bool:
