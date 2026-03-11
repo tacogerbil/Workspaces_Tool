@@ -227,12 +227,21 @@ def fetch_ad_data(
     import ssl
     from ldap3 import Server, Connection, ALL, Tls
 
+    # Ensure domain is prepended to username
+    if "\\" not in ad_user and search_base:
+        # Extract the first DC component as a best-effort domain (e.g., 'DC=aac,DC=local' -> 'aac')
+        import re
+        match = re.search(r"DC=([^,]+)", search_base, re.IGNORECASE)
+        domain = match.group(1).upper() if match else "DOMAIN"
+        ad_user = f"{domain}\\{ad_user}"
+
     tls_config = Tls(validate=ssl.CERT_NONE, version=ssl.PROTOCOL_TLSv1_2)
     server = Server(ad_server, use_ssl=True, tls=tls_config, get_info=ALL, connect_timeout=10)
     logging.info(f"Attempting AD bind - Server: '{ad_server}', User: '{ad_user}', PwdLen: {len(ad_password)}")
     conn = Connection(server, user=ad_user, password=ad_password, auto_bind=True, read_only=True)
     if not conn.bound:
         raise ConnectionError(f"LDAP bind failed for server '{ad_server}'.")
+
 
     try:
         # Computer objects (WSAMZN-* pattern)
