@@ -333,10 +333,11 @@ def build_live_query(active_columns: list[str]) -> str:
     select_parts.append("'LIVE' AS RecordType")
     joins = _build_join_clauses(active_columns)
 
+    _sep = ",\n    "
     return (
-        f"SELECT\n    {',\n    '.join(select_parts)}\n"
-        f"FROM workspaces w\n"
-        f"{joins}"
+        "SELECT\n    " + _sep.join(select_parts) + "\n"
+        "FROM workspaces w\n"
+        + joins
     )
 
 
@@ -399,12 +400,13 @@ def build_phantom_query(active_columns: list[str]) -> str:
     )
     select_parts.append(previous_names_sub)
 
+    _sep = ",\n    "
     return (
-        f"SELECT\n    {',\n    '.join(select_parts)}\n"
-        f"FROM ad_devices d\n"
-        f"INNER JOIN computer_name_history cnh ON d.ComputerName = cnh.ComputerName\n"
-        f"LEFT  JOIN workspaces w             ON cnh.WorkspaceId = w.WorkspaceId\n"
-        f"WHERE w.WorkspaceId IS NULL"
+        "SELECT\n    " + _sep.join(select_parts) + "\n"
+        "FROM ad_devices d\n"
+        "INNER JOIN computer_name_history cnh ON d.ComputerName = cnh.ComputerName\n"
+        "LEFT  JOIN workspaces w             ON cnh.WorkspaceId = w.WorkspaceId\n"
+        "WHERE w.WorkspaceId IS NULL"
     )
 
 
@@ -424,9 +426,10 @@ def build_archived_query(active_columns: list[str]) -> str:
     select_parts = _selected_expressions(active_columns, use_archived=True)
     select_parts.append("'ARCHIVED' AS RecordType")
 
+    _sep = ",\n    "
     return (
-        f"SELECT\n    {',\n    '.join(select_parts)}\n"
-        f"FROM historical_archives ha"
+        "SELECT\n    " + _sep.join(select_parts) + "\n"
+        "FROM historical_archives ha"
     )
 
 
