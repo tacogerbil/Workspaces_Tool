@@ -39,12 +39,11 @@ from PySide6.QtWidgets import (
     QMenu,
     QProgressBar,
     QPushButton,
-    QShortcut,
     QTreeView,
     QVBoxLayout,
     QWidget,
 )
-from PySide6.QtGui import QKeySequence
+from PySide6.QtGui import QKeySequence, QShortcut
 
 try:
     import pyqtgraph as pg
