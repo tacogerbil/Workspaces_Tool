@@ -398,6 +398,10 @@ class DashboardView(QWidget):
                 self._update_kpis(pd.DataFrame())
                 return
 
+            print(f"DEBUG: Concat frames count: {len(frames)}")
+            for f in frames:
+                print(f"  Frame shape: {f.shape}")
+            
             df = pd.concat(frames, ignore_index=True)
 
             # 3. Post-query enrichment (decryption, aliases, computed columns)
@@ -491,6 +495,7 @@ class DashboardView(QWidget):
         ]
         self._source_model.setHorizontalHeaderLabels(headers)
 
+        print(f"DEBUG _update_grid: appending {len(df)} rows to QStandardItemModel")
         for _, row in df.iterrows():
             items = self._build_row_items(row, active)
             self._apply_row_color(items, row)
@@ -629,14 +634,15 @@ class DashboardView(QWidget):
         if ok:
             try:
                 # Update in DB
+                note_value = new_note or None  # store NULL rather than empty string
                 self._db.execute_query(
-                    "UPDATE ad_users SET Notes=? WHERE UserName=?", (new_note, username)
+                    "UPDATE ad_users SET Notes=? WHERE UserName=?", (note_value, username)
                 )
-                
+
                 # Also blindly update the historical_archives table if they click an archived note
                 # (since old app didn't explicitly separate them in the DB save)
                 self._db.execute_query(
-                    "UPDATE historical_archives SET Notes=? WHERE UserName=?", (new_note, username)
+                    "UPDATE historical_archives SET Notes=? WHERE UserName=?", (note_value, username)
                 )
                 
                 # Instantly reflect in the visual model

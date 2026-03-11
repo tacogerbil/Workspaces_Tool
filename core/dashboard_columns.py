@@ -208,7 +208,7 @@ COLUMN_REGISTRY: dict[str, ColumnDef] = {
         sql_expr="u.Company",
         sql_alias="Company",
         requires_joins=frozenset({"u"}),
-        archived_sql_expr="COALESCE(u.Company, ha.Company)",
+        archived_sql_expr="ha.Company",
         requires_decrypt=True,
         is_visible_by_default=True,
     ),
@@ -217,7 +217,7 @@ COLUMN_REGISTRY: dict[str, ColumnDef] = {
         sql_expr="u.Notes",
         sql_alias="Notes",
         requires_joins=frozenset({"u"}),
-        archived_sql_expr="COALESCE(u.Notes, ha.Notes)",
+        archived_sql_expr="COALESCE(NULLIF(u.Notes, ''), ha.Notes)",
         is_visible_by_default=True,
     ),
 

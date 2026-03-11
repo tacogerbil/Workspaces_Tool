@@ -1,0 +1,20 @@
+=== PHANTOM QUERY ===
+SELECT
+    NULL AS AWSStatus,
+    cnh.WorkspaceId AS WorkspaceId,
+    d.ComputerName AS ComputerName,
+    NULL AS UserName,
+    NULL AS Company,
+    NULL AS UserADStatus,
+    d.DeviceADStatus AS DeviceADStatus,
+    NULL AS DaysInactive,
+    d.CreationDate AS OriginalCreationDate,
+    NULL AS Notes,
+    NULL AS RunningMode,
+    NULL AS DirectoryId,
+    'PHANTOM_AWS' AS RecordType,
+    (SELECT GROUP_CONCAT(cnh2.ComputerName, ' → ') FROM computer_name_history cnh2 WHERE cnh2.WorkspaceId = cnh.WorkspaceId AND cnh2.ComputerName != d.ComputerName) AS PreviousNames
+FROM ad_devices d
+INNER JOIN computer_name_history cnh ON d.ComputerName = cnh.ComputerName
+LEFT  JOIN workspaces w             ON cnh.WorkspaceId = w.WorkspaceId
+WHERE w.WorkspaceId IS NULL
