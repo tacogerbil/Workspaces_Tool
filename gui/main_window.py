@@ -32,6 +32,7 @@ from adapters.config_adapter import ConfigAdapter
 from adapters.db_adapter import DbAdapter
 from adapters.sccm_sql_adapter import SccmSqlAdapter
 from core.encryption import DataEncryptor
+from core.schema_manager import ensure_schema, SOFTWARE_TABLE_SCHEMAS
 from gui.dashboard_view import DashboardView
 from gui.preferences_view import PreferencesView
 from gui.sccm_mapper_view import SccmMapperView
@@ -77,7 +78,12 @@ class UnifiedMainWindow(QMainWindow):
         # 3. Encryption
         self.encryptor = self._build_encryptor()
 
-        # 4. Services
+        # 4. Schema enforcement — ensures all columns exist in both DBs
+        #    Safe to call every startup: missing columns are added, existing ones skipped.
+        ensure_schema(self.db_adapter)
+        ensure_schema(self.sccm_db_adapter, SOFTWARE_TABLE_SCHEMAS)
+
+        # 5. Services
         self.workspace_service = AwsAdWorkspaceService(
             db=self.db_adapter,
             config=self.config_adapter,
@@ -88,7 +94,7 @@ class UnifiedMainWindow(QMainWindow):
         self.sccm_service = SccmSyncService(SccmSqlAdapter(), self.sccm_db_adapter)
         self.csv_service = CsvIngestionService(self.sccm_db_adapter)
 
-        # 5. UI
+        # 6. UI
         self._setup_ui()
 
     # ------------------------------------------------------------------
@@ -165,6 +171,8 @@ class UnifiedMainWindow(QMainWindow):
             DashboardView(
                 db_adapter=self.db_adapter,
                 workspace_service=self.workspace_service,
+                encryptor=self.encryptor,
+                config_adapter=self.config_adapter,
             ),
             "📊 Dashboard",
         )

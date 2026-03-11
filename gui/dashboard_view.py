@@ -1,29 +1,50 @@
 """
 dashboard_view.py — Live monitoring dashboard.
 
-Displays workspace KPIs, an optional status chart, and a sortable data grid.
-Refreshes from the DB every 30 seconds and provides a manual "Refresh from AWS & AD"
-button that triggers the full sync pipeline via workspace_service.
+Displays workspace KPIs, an optional status chart, and a fully dynamic sortable
+data grid. All SQL queries are generated from COLUMN_REGISTRY — no column names
+are hardcoded in this file.
+
+Key design decisions:
+  - QSortFilterProxyModel wraps the source model so sort survives every refresh.
+  - Sort column and direction are persisted to config.ini via ConfigAdapter.
+  - Row color coding is applied via QStandardItem foreground/background.
+  - Phantom (PHANTOM_AWS) and archived rows are included when flags are toggled.
 """
 
 from __future__ import annotations
 
 import logging
-from typing import Optional
+from datetime import datetime
+from typing import Any, Optional
 
-from PySide6.QtCore import Qt, QTimer, QThreadPool, Signal, QObject, QRunnable
+import pandas as pd
+from PySide6.QtCore import (
+    Qt,
+    QSortFilterProxyModel,
+    QTimer,
+    QThreadPool,
+    Signal,
+    QObject,
+    QRunnable,
+)
 from PySide6.QtGui import QColor, QFont, QStandardItem, QStandardItemModel
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QApplication,
+    QCheckBox,
     QGroupBox,
     QHBoxLayout,
     QLabel,
+    QMenu,
     QProgressBar,
     QPushButton,
+    QShortcut,
     QTreeView,
     QVBoxLayout,
     QWidget,
 )
+from PySide6.QtGui import QKeySequence
 
 try:
     import pyqtgraph as pg
@@ -31,8 +52,25 @@ try:
 except ImportError:
     _PYQTGRAPH_AVAILABLE = False
 
+from core.dashboard_columns import (
+    COLUMN_REGISTRY,
+    DEFAULT_DASHBOARD_COLUMNS,
+    build_live_query,
+    build_phantom_query,
+    build_archived_query,
+    enrich_dataframe,
+)
+from services.workspace_data_processor import load_aliases, load_pricing_data
 
 _STATUS_LABELS = ["AVAILABLE", "ERROR", "PENDING", "STARTING", "STOPPED"]
+
+# ---------------------------------------------------------------------------
+# Row color map (reference parity)
+# ---------------------------------------------------------------------------
+_COMPANY_PALETTE = [
+    "#E6F3FF", "#E6FFF3", "#F3E6FF", "#FFF3E6",
+    "#FFFFE6", "#FFE6F3", "#F3FFE6", "#E6E6FF",
+]
 
 
 # ---------------------------------------------------------------------------
@@ -40,14 +78,14 @@ _STATUS_LABELS = ["AVAILABLE", "ERROR", "PENDING", "STARTING", "STOPPED"]
 # ---------------------------------------------------------------------------
 
 class _SyncSignals(QObject):
-    finished = Signal(str)   # success message
-    error = Signal(str)      # error message
+    finished = Signal(str)
+    error = Signal(str)
 
 
 class _SyncWorker(QRunnable):
     """Runs process_and_store_data() in a thread pool thread."""
 
-    def __init__(self, workspace_service, mode: str = "full") -> None:
+    def __init__(self, workspace_service: Any, mode: str = "full") -> None:
         super().__init__()
         self._service = workspace_service
         self._mode = mode
@@ -58,7 +96,7 @@ class _SyncWorker(QRunnable):
             msg = self._service.process_and_store_data(self._mode)
             self.signals.finished.emit(msg)
         except Exception as exc:
-            logging.error(f"Dashboard sync failed: {exc}", exc_info=True)
+            logging.error("Dashboard sync failed: %s", exc, exc_info=True)
             self.signals.error.emit(str(exc))
 
 
@@ -72,25 +110,68 @@ class DashboardView(QWidget):
     def __init__(
         self,
         parent: Optional[QWidget] = None,
-        db_adapter=None,
-        workspace_service=None,
+        db_adapter: Any = None,
+        workspace_service: Any = None,
+        encryptor: Any = None,
+        config_adapter: Any = None,
     ) -> None:
         super().__init__(parent)
         self._db = db_adapter
         self._service = workspace_service
+        self._encryptor = encryptor
+        self._config = config_adapter
         self._pool = QThreadPool.globalInstance()
 
-        self._setup_ui()
+        # Resolve scripts dir (execution/ root) for alias + pricing loading
+        import os
+        self._scripts_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-        # Periodic DB refresh (reads cached data only)
+        # Lookup tables loaded lazily
+        self._aliases: dict[str, str] = {}
+        self._pricing: Optional[dict] = None
+
+        # Dashboard state
+        self._show_archived = False
+        self._company_colors: dict[str, QColor] = {}
+        self._company_palette_idx = 0
+
+        # Active columns — loaded from config or default
+        self._active_columns: list[str] = self._load_column_prefs()
+
+        # Sort state — loaded from config
+        self._sort_col_id, self._sort_direction = self._load_sort_prefs()
+
+        self._setup_ui()
+        self._connect_sort_signal()
+
+        # Periodic DB refresh (reads cached data; no AWS/AD calls)
         self._db_timer = QTimer(self)
         self._db_timer.timeout.connect(self._refresh_from_db)
         self._db_timer.start(30_000)
 
-        # Initial lightweight AWS-only sync in background on startup
         self._refresh_from_db()
         if self._service:
             self._trigger_sync(mode="aws_only")
+
+    # ------------------------------------------------------------------
+    # Config helpers
+    # ------------------------------------------------------------------
+
+    def _load_column_prefs(self) -> list[str]:
+        if self._config:
+            saved = self._config.get_dashboard_columns()
+            if saved:
+                return saved
+        return list(DEFAULT_DASHBOARD_COLUMNS)
+
+    def _load_sort_prefs(self) -> tuple[str, str]:
+        if self._config:
+            return self._config.get_dashboard_sort()
+        return "DaysInactive", "DESC"
+
+    def _save_sort_prefs(self, col_id: str, direction: str) -> None:
+        if self._config:
+            self._config.set_dashboard_sort(col_id, direction)
 
     # ------------------------------------------------------------------
     # UI construction
@@ -104,13 +185,24 @@ class DashboardView(QWidget):
         self._btn_refresh = QPushButton("🔄  Refresh from AWS & AD")
         self._btn_refresh.setFixedHeight(32)
         self._btn_refresh.clicked.connect(lambda: self._trigger_sync("full"))
+
+        self._btn_reload_aliases = QPushButton("🔄 Reload Aliases")
+        self._btn_reload_aliases.setFixedHeight(32)
+        self._btn_reload_aliases.clicked.connect(self._reload_aliases)
+
+        self._chk_archived = QCheckBox("Show Archived")
+        self._chk_archived.stateChanged.connect(self._on_archive_toggle)
+
         self._status_label = QLabel("Last sync: never")
         self._status_label.setStyleSheet("color:#888;font-size:11px;")
         self._progress = QProgressBar()
-        self._progress.setRange(0, 0)  # indeterminate
+        self._progress.setRange(0, 0)
         self._progress.setFixedHeight(6)
         self._progress.setVisible(False)
+
         toolbar.addWidget(self._btn_refresh)
+        toolbar.addWidget(self._btn_reload_aliases)
+        toolbar.addWidget(self._chk_archived)
         toolbar.addWidget(self._progress, 1)
         toolbar.addWidget(self._status_label)
         root.addLayout(toolbar)
@@ -147,12 +239,19 @@ class DashboardView(QWidget):
         self._tree.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self._tree.setAlternatingRowColors(True)
         self._tree.setSortingEnabled(True)
-        self._model = QStandardItemModel()
-        self._model.setHorizontalHeaderLabels(
-            ["Workspace ID", "UserName", "AWS Status", "Computer Name",
-             "Directory ID", "Migration Status"]
-        )
-        self._tree.setModel(self._model)
+        self._tree.setContextMenuPolicy(Qt.CustomContextMenu)
+        self._tree.customContextMenuRequested.connect(self._on_right_click)
+
+        # Proxy model for sort persistence across refreshes
+        self._source_model = QStandardItemModel()
+        self._proxy = QSortFilterProxyModel()
+        self._proxy.setSourceModel(self._source_model)
+        self._tree.setModel(self._proxy)
+
+        # Ctrl+C shortcut
+        shortcut = QShortcut(QKeySequence.Copy, self._tree)
+        shortcut.activated.connect(self._copy_selected_rows)
+
         grid_layout.addWidget(self._tree)
         root.addWidget(grid_group, stretch=1)
 
@@ -173,6 +272,39 @@ class DashboardView(QWidget):
         row.addWidget(card)
         return lbl
 
+    def _connect_sort_signal(self) -> None:
+        """Save sort state to config whenever the user clicks a column header."""
+        header = self._tree.header()
+        header.sortIndicatorChanged.connect(self._on_sort_changed)
+
+    # ------------------------------------------------------------------
+    # Sort state
+    # ------------------------------------------------------------------
+
+    def _on_sort_changed(self, logical_index: int, order: Qt.SortOrder) -> None:
+        """Persist the new sort column and direction to config.ini."""
+        col_id = self._col_id_for_proxy_index(logical_index)
+        direction = "ASC" if order == Qt.AscendingOrder else "DESC"
+        self._sort_col_id = col_id
+        self._sort_direction = direction
+        self._save_sort_prefs(col_id, direction)
+
+    def _col_id_for_proxy_index(self, logical_index: int) -> str:
+        """Map a proxy column index back to a COLUMN_REGISTRY key."""
+        try:
+            return self._active_columns[logical_index]
+        except IndexError:
+            return self._sort_col_id  # fallback to last known
+
+    def _restore_sort(self) -> None:
+        """Re-apply the saved sort after a model rebuild."""
+        try:
+            col_index = self._active_columns.index(self._sort_col_id)
+        except ValueError:
+            col_index = 0
+        order = Qt.AscendingOrder if self._sort_direction == "ASC" else Qt.DescendingOrder
+        self._proxy.sort(col_index, order)
+
     # ------------------------------------------------------------------
     # Sync trigger
     # ------------------------------------------------------------------
@@ -192,70 +324,277 @@ class DashboardView(QWidget):
     def _on_sync_done(self, msg: str) -> None:
         self._progress.setVisible(False)
         self._btn_refresh.setEnabled(True)
-        from datetime import datetime
         self._status_label.setText(f"Last sync: {datetime.now().strftime('%H:%M:%S')}")
         self._refresh_from_db()
 
     def _on_sync_error(self, err: str) -> None:
         self._progress.setVisible(False)
         self._btn_refresh.setEnabled(True)
-        self._status_label.setText(f"⚠ Sync error — see logs")
-        logging.error(f"Dashboard sync error: {err}")
+        self._status_label.setText("⚠ Sync error — see logs")
+        logging.error("Dashboard sync error: %s", err)
 
     # ------------------------------------------------------------------
-    # DB read and display update
+    # Toolbar actions
+    # ------------------------------------------------------------------
+
+    def _reload_aliases(self) -> None:
+        self._aliases = load_aliases(self._scripts_dir)
+        self._refresh_from_db()
+
+    def _on_archive_toggle(self, state: int) -> None:
+        self._show_archived = state == Qt.Checked
+        self._refresh_from_db()
+
+    # ------------------------------------------------------------------
+    # DB read — the only place SQL is executed in this file
     # ------------------------------------------------------------------
 
     def _refresh_from_db(self) -> None:
-        """Reads cached workspace data from the DB and updates all panels."""
+        """Build queries dynamically from the active column registry and refresh all panels."""
         if not self._db:
             return
+
+        # Lazy-load lookup tables once
+        if not self._aliases:
+            self._aliases = load_aliases(self._scripts_dir)
+        if self._pricing is None:
+            self._pricing = load_pricing_data(self._scripts_dir)
+
+        active = self._active_columns
+
+        try:
+            # 1. Pre-query: usage totals and name history (cheap aggregate queries)
+            usage_map = self._fetch_usage_map()
+            history_map = self._fetch_history_map()
+
+            # 2. Build and run queries dynamically from the registry
+            live_df = self._db.read_sql(build_live_query(active))
+            phantom_df = self._db.read_sql(build_phantom_query(active))
+
+            frames = [f for f in [live_df, phantom_df] if not f.empty]
+
+            if self._show_archived:
+                archived_df = self._db.read_sql(build_archived_query(active))
+                if not archived_df.empty:
+                    frames.append(archived_df)
+
+            if not frames:
+                self._update_kpis(pd.DataFrame())
+                return
+
+            df = pd.concat(frames, ignore_index=True)
+
+            # 3. Post-query enrichment (decryption, aliases, computed columns)
+            df = enrich_dataframe(
+                df, active, self._encryptor, self._aliases,
+                self._pricing, usage_map, history_map,
+            )
+
+        except Exception as exc:
+            logging.error("Dashboard DB refresh failed: %s", exc, exc_info=True)
+            return
+
+        self._update_kpis(df)
+        self._update_grid(df, active)
+
+    def _fetch_usage_map(self) -> dict[str, float]:
+        """Pre-query: {WorkspaceId: total_used_hours}."""
         try:
             df = self._db.read_sql(
-                "SELECT WorkspaceId, UserName, AWSStatus, ComputerName, "
-                "DirectoryId, migration_status FROM workspaces ORDER BY UserName"
+                "SELECT WorkspaceId, SUM(UsedHours) AS TotalHours "
+                "FROM usage_history GROUP BY WorkspaceId"
             )
-        except Exception as exc:
-            logging.error(f"Dashboard DB refresh failed: {exc}")
-            return
+            if not df.empty:
+                return dict(zip(df["WorkspaceId"], df["TotalHours"]))
+        except Exception:
+            pass
+        return {}
 
+    def _fetch_history_map(self) -> dict[str, list[str]]:
+        """Pre-query: {WorkspaceId: [previous_computer_names]}."""
+        try:
+            df = self._db.read_sql(
+                "SELECT cnh.WorkspaceId, cnh.ComputerName "
+                "FROM computer_name_history cnh "
+                "INNER JOIN workspaces w ON cnh.WorkspaceId = w.WorkspaceId "
+                "WHERE cnh.ComputerName != w.ComputerName"
+            )
+            if not df.empty:
+                result: dict[str, list[str]] = {}
+                for _, row in df.iterrows():
+                    result.setdefault(row["WorkspaceId"], []).append(row["ComputerName"])
+                return result
+        except Exception:
+            pass
+        return {}
+
+    # ------------------------------------------------------------------
+    # KPI update
+    # ------------------------------------------------------------------
+
+    def _update_kpis(self, df: pd.DataFrame) -> None:
         if df.empty:
             self._lbl_total.setText("0")
+            self._lbl_available.setText("0")
+            self._lbl_error.setText("0")
+            self._lbl_pending.setText("0")
             return
 
-        aws = "AWSStatus" if "AWSStatus" in df.columns else None
-        mig = "migration_status" if "migration_status" in df.columns else None
+        live = df[df["RecordType"] == "LIVE"] if "RecordType" in df.columns else df
+        aws = "AWSStatus"
+        mig = "migration_status"
 
-        total = len(df)
-        available = int((df[aws] == "AVAILABLE").sum()) if aws else 0
-        err_stopped = int(df[aws].isin(["ERROR", "STOPPED"]).sum()) if aws else 0
-        pending = int((df[mig] == "PENDING").sum()) if mig else 0
+        self._lbl_total.setText(str(len(live)))
+        if aws in live.columns:
+            self._lbl_available.setText(str(int((live[aws] == "AVAILABLE").sum())))
+            self._lbl_error.setText(str(int(live[aws].isin(["ERROR", "STOPPED"]).sum())))
+        if mig in live.columns:
+            self._lbl_pending.setText(str(int((live[mig] == "PENDING").sum())))
 
-        self._lbl_total.setText(str(total))
-        self._lbl_available.setText(str(available))
-        self._lbl_error.setText(str(err_stopped))
-        self._lbl_pending.setText(str(pending))
-
-        if _PYQTGRAPH_AVAILABLE and aws:
-            counts = df[aws].value_counts()
+        if _PYQTGRAPH_AVAILABLE and aws in live.columns:
+            counts = live[aws].value_counts()
             self._bar_item.setOpts(
                 height=[counts.get(s, 0) for s in _STATUS_LABELS]
             )
 
-        self._model.removeRows(0, self._model.rowCount())
-        for _, row in df.iterrows():
-            status_str = str(row.get("AWSStatus", ""))
-            status_item = QStandardItem(status_str)
-            if status_str == "AVAILABLE":
-                status_item.setForeground(QColor("#6dbe6d"))
-            elif status_str in ("ERROR", "STOPPED"):
-                status_item.setForeground(QColor("#e06c6c"))
+    # ------------------------------------------------------------------
+    # Grid update
+    # ------------------------------------------------------------------
 
-            self._model.appendRow([
-                QStandardItem(str(row.get("WorkspaceId", ""))),
-                QStandardItem(str(row.get("UserName", ""))),
-                status_item,
-                QStandardItem(str(row.get("ComputerName", ""))),
-                QStandardItem(str(row.get("DirectoryId", ""))),
-                QStandardItem(str(row.get("migration_status", ""))),
-            ])
+    def _update_grid(self, df: pd.DataFrame, active: list[str]) -> None:
+        """Rebuild the grid model and reapply the saved sort."""
+        self._source_model.clear()
+
+        # Set headers from ColumnDef.display_name
+        headers = [
+            COLUMN_REGISTRY[col_id].display_name
+            for col_id in active
+            if col_id in COLUMN_REGISTRY
+        ]
+        self._source_model.setHorizontalHeaderLabels(headers)
+
+        for _, row in df.iterrows():
+            items = self._build_row_items(row, active)
+            self._apply_row_color(items, row)
+            self._source_model.appendRow(items)
+
+        self._tree.resizeColumnToContents(0)
+        self._restore_sort()
+
+    def _build_row_items(
+        self, row: pd.Series, active: list[str]
+    ) -> list[QStandardItem]:
+        items: list[QStandardItem] = []
+        for col_id in active:
+            defn = COLUMN_REGISTRY.get(col_id)
+            if not defn:
+                continue
+            raw = row.get(defn.sql_alias, "")
+            text = "" if pd.isna(raw) else str(raw)
+            item = QStandardItem(text)
+            item.setData(raw, Qt.UserRole)  # preserve raw value for numeric sort
+            items.append(item)
+        return items
+
+    def _apply_row_color(
+        self, items: list[QStandardItem], row: pd.Series
+    ) -> None:
+        """Apply reference-matching color coding to all items in a row."""
+        record_type = row.get("RecordType", "LIVE")
+
+        if record_type == "ARCHIVED":
+            grey = QColor("#888888")
+            fnt = QFont()
+            fnt.setItalic(True)
+            for item in items:
+                item.setForeground(grey)
+                item.setFont(fnt)
+            return
+
+        if record_type == "PHANTOM_AWS":
+            phantom_bg = QColor("#FFDDC1")
+            for item in items:
+                item.setBackground(phantom_bg)
+            return
+
+        # LIVE row color rules
+        user_status = str(row.get("UserADStatus", ""))
+        device_status = str(row.get("DeviceADStatus", ""))
+
+        if user_status in ("DISABLED",) or device_status == "DISABLED":
+            dark_red = QColor("#A52A2A")
+            for item in items:
+                item.setForeground(dark_red)
+            return
+
+        if user_status == "NOT_FOUND_IN_AD":
+            for item in items:
+                item.setForeground(QColor("#CC0000"))
+            return
+
+        if device_status == "MISSING_IN_AD":
+            light_red = QColor("#FFEBE6")
+            for item in items:
+                item.setBackground(light_red)
+            return
+
+        # Company banding
+        company = str(row.get("Company", "") or "")
+        if company and company != "None":
+            color = self._company_color(company)
+            for item in items:
+                item.setBackground(color)
+
+    def _company_color(self, company: str) -> QColor:
+        if company not in self._company_colors:
+            hex_val = _COMPANY_PALETTE[
+                self._company_palette_idx % len(_COMPANY_PALETTE)
+            ]
+            self._company_colors[company] = QColor(hex_val)
+            self._company_palette_idx += 1
+        return self._company_colors[company]
+
+    # ------------------------------------------------------------------
+    # Context menu — right-click copy cell
+    # ------------------------------------------------------------------
+
+    def _on_right_click(self, pos) -> None:
+        index = self._tree.indexAt(pos)
+        if not index.isValid():
+            return
+        value = index.data(Qt.DisplayRole) or ""
+        menu = QMenu(self)
+        action = menu.addAction(f"Copy: {value[:60]}")
+        action.triggered.connect(
+            lambda: QApplication.clipboard().setText(str(value))
+        )
+        menu.exec(self._tree.viewport().mapToGlobal(pos))
+
+    # ------------------------------------------------------------------
+    # Ctrl+C — copy selected rows as TSV
+    # ------------------------------------------------------------------
+
+    def _copy_selected_rows(self) -> None:
+        selection = self._tree.selectionModel().selectedRows()
+        if not selection:
+            return
+
+        # Build header line
+        header = self._source_model.horizontalHeaderItem
+        col_count = self._source_model.columnCount()
+        header_row = "\t".join(
+            self._source_model.horizontalHeaderItem(c).text()
+            for c in range(col_count)
+        )
+
+        lines = [header_row]
+        for proxy_idx in selection:
+            source_idx = self._proxy.mapToSource(proxy_idx)
+            row_num = source_idx.row()
+            cells = [
+                self._source_model.item(row_num, c).text()
+                for c in range(col_count)
+            ]
+            lines.append("\t".join(cells))
+
+        QApplication.clipboard().setText("\n".join(lines))

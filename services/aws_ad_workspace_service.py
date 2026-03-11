@@ -265,10 +265,9 @@ class AwsAdWorkspaceService:
                     except Exception as exc:
                         logging.error(f"Failed to create table '{table_name}': {exc}")
 
-        # Safe migration: add any columns that may be missing in older DBs
-        self._db.add_column_if_not_exists("ad_users", "Notes", "TEXT")
-        self._db.add_column_if_not_exists("workspaces", "migration_status", "TEXT DEFAULT 'Pending'")
-
+        # Column-level migrations are now handled by schema_manager.ensure_schema()
+        # which is called once at startup in UnifiedMainWindow before this service
+        # is constructed. No add_column_if_not_exists calls needed here.
         logging.info("Database schema ready.")
 
     # ------------------------------------------------------------------

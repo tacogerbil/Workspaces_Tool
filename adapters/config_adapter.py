@@ -267,3 +267,54 @@ class ConfigAdapter:
         self._set_section_values(
             "GUI_Migrator", {"visible_columns": ",".join(columns)}
         )
+
+    # ------------------------------------------------------------------
+    # Dashboard column layout + sort persistence
+    # ------------------------------------------------------------------
+
+    def get_dashboard_columns(self) -> List[str]:
+        """Returns the user's preferred visible column IDs for the Dashboard view.
+
+        Column IDs match keys in dashboard_columns.COLUMN_REGISTRY.
+        Falls back to an empty list; the caller should substitute DEFAULT_DASHBOARD_COLUMNS.
+        """
+        config = self.load_config()
+        raw = config.get("Dashboard", "visible_columns", fallback="")
+        if raw:
+            return [c.strip() for c in raw.split(",") if c.strip()]
+        return []
+
+    def set_dashboard_columns(self, columns: List[str]) -> None:
+        """Persist the ordered list of visible column IDs for the Dashboard view."""
+        self._set_section_values(
+            "Dashboard", {"visible_columns": ",".join(columns)}
+        )
+
+    def get_dashboard_sort(self) -> tuple[str, str]:
+        """Returns the saved sort state as (column_id, direction).
+
+        direction is "ASC" or "DESC".  Falls back to ("DaysInactive", "DESC").
+        """
+        config = self.load_config()
+        col = config.get("Dashboard", "sort_column", fallback="DaysInactive")
+        direction = config.get("Dashboard", "sort_direction", fallback="DESC").upper()
+        if direction not in ("ASC", "DESC"):
+            direction = "DESC"
+        return col, direction
+
+    def set_dashboard_sort(self, column_id: str, direction: str) -> None:
+        """Persist the dashboard sort column and direction to config.ini.
+
+        Args:
+            column_id: A key from COLUMN_REGISTRY (e.g. "DaysInactive").
+            direction: "ASC" or "DESC".
+        """
+        direction = direction.upper()
+        if direction not in ("ASC", "DESC"):
+            direction = "DESC"
+        config = self.load_config()
+        if not config.has_section("Dashboard"):
+            config.add_section("Dashboard")
+        config.set("Dashboard", "sort_column", column_id)
+        config.set("Dashboard", "sort_direction", direction)
+        self.save_config(config)
