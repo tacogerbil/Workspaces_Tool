@@ -123,7 +123,8 @@ class DashboardView(QWidget):
 
         # Resolve scripts dir (execution/ root) for alias + pricing loading
         import os
-        self._scripts_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        from pathlib import Path
+        self._scripts_dir = Path(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
         # Lookup tables loaded lazily
         self._aliases: dict[str, str] = {}
