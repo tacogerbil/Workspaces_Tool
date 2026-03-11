@@ -570,6 +570,10 @@ class DashboardView(QWidget):
 
     def _update_grid(self, df: pd.DataFrame, active: list[str]) -> None:
         """Rebuild the grid model and reapply the saved sort."""
+        # Preserve scroll position and selected row across refreshes
+        vscroll = self._tree.verticalScrollBar().value()
+        selected_key = self._get_selected_row_key(active)
+
         self._source_model.clear()
 
         # Set headers from ColumnDef.display_name
@@ -588,6 +592,44 @@ class DashboardView(QWidget):
 
         self._tree.resizeColumnToContents(0)
         self._restore_sort()
+
+        # Restore selection by row identity; fall back to scroll position
+        if selected_key and not self._restore_selected_row(selected_key, active):
+            self._tree.verticalScrollBar().setValue(vscroll)
+
+    def _get_selected_row_key(self, active: list[str]) -> str | None:
+        """Return the UserName (or WorkspaceId) of the currently selected proxy row."""
+        sel = self._tree.selectionModel().selectedRows()
+        if not sel:
+            return None
+        proxy_idx = sel[0]
+        for key_col in ("UserName", "WorkspaceId"):
+            if key_col in active:
+                col = active.index(key_col)
+                value = proxy_idx.siblingAtColumn(col).data(Qt.DisplayRole)
+                if value:
+                    return f"{key_col}:{value}"
+        return None
+
+    def _restore_selected_row(self, key: str, active: list[str]) -> bool:
+        """Find the row matching *key* in the proxy, select it, and scroll to it."""
+        try:
+            col_name, value = key.split(":", 1)
+        except ValueError:
+            return False
+        if col_name not in active:
+            return False
+        col = active.index(col_name)
+        for proxy_row in range(self._proxy.rowCount()):
+            idx = self._proxy.index(proxy_row, col)
+            if idx.data(Qt.DisplayRole) == value:
+                self._tree.selectionModel().setCurrentIndex(
+                    self._proxy.index(proxy_row, 0),
+                    self._tree.selectionModel().ClearAndSelect | self._tree.selectionModel().Rows,
+                )
+                self._tree.scrollTo(self._proxy.index(proxy_row, 0), QAbstractItemView.PositionAtCenter)
+                return True
+        return False
 
     def _build_row_items(
         self, row: pd.Series, active: list[str]
