@@ -15,7 +15,7 @@ import logging
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Generator, List, Optional, Tuple
+from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 from adapters.db_adapter import DbAdapter
 from adapters.config_adapter import ConfigAdapter
@@ -701,8 +701,8 @@ class AwsAdWorkspaceService:
 
     def create_workspaces(
         self, creation_requests: List[Dict]
-    ) -> Generator[Tuple[str, str], None, None]:
-        """Creates workspaces via the AWS API, yielding status tuples."""
+    ) -> Iterator[Tuple[str, str]]:
+        """Creates workspaces via the AWS API, yielding (username, status) tuples."""
         import boto3
 
         aws_cfg = self._config.get_aws_config()

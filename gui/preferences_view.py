@@ -1,7 +1,7 @@
 """
 preferences_view.py — User preferences tab for all configurable settings.
 
-All settings are per-user (stored in %LOCALAPPDATA%\AdamsWorkspacesBuster\config.ini).
+All settings are per-user (stored in %LOCALAPPDATA%\\AdamsWorkspacesBuster\\config.ini).
 No hard-coded server names, paths, or account names.
 A restart-required banner appears if the DB backend type is changed.
 """

@@ -2,7 +2,7 @@
 config_adapter.py — Read/write adapter for the per-user config.ini.
 
 Config is stored in the Windows user-profile directory:
-  %LOCALAPPDATA%\AdamsWorkspacesBuster\config.ini
+  %LOCALAPPDATA%\\AdamsWorkspacesBuster\\config.ini
 
 Each Windows user running the app gets their own isolated config file.
 No hard-coded server names, paths, or account names anywhere in this module.
