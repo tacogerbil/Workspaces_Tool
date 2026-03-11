@@ -8,6 +8,7 @@ from PySide6.QtWidgets import (
     QHeaderView, QFormLayout, QDialogButtonBox,
 )
 from PySide6.QtCore import Qt, QThreadPool
+from PySide6.QtGui import QStandardItemModel, QStandardItem
 
 from gui.workers import ServiceWorker
 

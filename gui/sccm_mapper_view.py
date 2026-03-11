@@ -1,22 +1,46 @@
+"""
+sccm_mapper_view.py — SCCM software catalog sync and workspace software mapping.
+
+Responsibilities:
+  - Sync the SCCM catalog from the SQL server into the local DB
+  - Ingest workspace software CSV exports
+  - Fuzzy-match inventory → catalog (Matched / Review / Needs Packaging / Ignored)
+  - Let users assign software items to software groups or mark them ignored
+  - Save assignments back to the software_inventory table
+  - Show installation details (which machines have a given software)
+"""
+from __future__ import annotations
+
 import logging
 from typing import Optional
 
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
-    QTreeView, QAbstractItemView, QSplitter, QMenu,
-    QMessageBox, QFileDialog, QListWidget, QGroupBox,
+    QAbstractItemView,
+    QFileDialog,
+    QGroupBox,
+    QHBoxLayout,
+    QLabel,
+    QListWidget,
+    QListWidgetItem,
+    QMenu,
+    QMessageBox,
+    QPushButton,
+    QSplitter,
+    QTreeView,
+    QVBoxLayout,
+    QWidget,
 )
 from PySide6.QtCore import Qt, QThreadPool
-from PySide6.QtGui import QStandardItemModel, QStandardItem
+from PySide6.QtGui import QStandardItem, QStandardItemModel
 
-from core.encryption import DataEncryptor
 from adapters.config_adapter import ConfigAdapter
-from services.sccm_sync_service import SccmSyncService
-from services.csv_ingestion_service import CsvIngestionService
+from core.encryption import DataEncryptor
 from gui.workers import ServiceWorker
+from services.csv_ingestion_service import CsvIngestionService
+from services.sccm_sync_service import SccmSyncService
 
 try:
-    from rapidfuzz import process, fuzz
+    from rapidfuzz import fuzz, process
     _RAPIDFUZZ_AVAILABLE = True
 except ImportError:
     _RAPIDFUZZ_AVAILABLE = False
@@ -25,12 +49,15 @@ except ImportError:
 _FUZZY_CONFIRM_THRESHOLD = 90
 _FUZZY_REVIEW_THRESHOLD = 75
 
+# Sentinel stored in Qt.UserRole to mark an item as deliberately ignored
+IGNORE_TAG = "__IGNORE__"
+
 
 class SccmMapperView(QWidget):
     """SCCM software catalog sync and workspace software categorization tool.
 
-    Accepts injected services so all infrastructure dependencies are created
-    outside this class and testable independently.
+    All infrastructure dependencies are injected — this view contains no
+    direct DB or network access.
     """
 
     def __init__(
@@ -39,7 +66,7 @@ class SccmMapperView(QWidget):
         encryptor: Optional[DataEncryptor] = None,
         sccm_service: Optional[SccmSyncService] = None,
         csv_service: Optional[CsvIngestionService] = None,
-    ):
+    ) -> None:
         super().__init__(parent)
         self.encryptor = encryptor
         self.sccm_service = sccm_service
@@ -48,21 +75,28 @@ class SccmMapperView(QWidget):
         self._setup_ui()
         self.categorize_software()
 
-    # ---------------------------------------------------------------------------
+    # ------------------------------------------------------------------
     # UI construction
-    # ---------------------------------------------------------------------------
+    # ------------------------------------------------------------------
 
     def _setup_ui(self) -> None:
         main_layout = QVBoxLayout(self)
 
+        # Top control bar
         controls = QHBoxLayout()
-        self.btn_sync = QPushButton("Sync SCCM Catalog")
+        self.btn_sync = QPushButton("🔄 Sync SCCM Catalog")
         self.btn_sync.clicked.connect(self._on_sync_sccm_clicked)
-        self.btn_csv = QPushButton("Load Workspace CSVs")
+        self.btn_csv = QPushButton("📂 Load Workspace CSVs")
         self.btn_csv.clicked.connect(self._on_load_csv_clicked)
+        self.btn_groups = QPushButton("🗂 Manage Groups")
+        self.btn_groups.clicked.connect(self._on_manage_groups_clicked)
+        self.btn_save = QPushButton("💾 Save Assignments")
+        self.btn_save.clicked.connect(self._on_save_assignments_clicked)
         controls.addWidget(self.btn_sync)
         controls.addWidget(self.btn_csv)
         controls.addStretch()
+        controls.addWidget(self.btn_groups)
+        controls.addWidget(self.btn_save)
         main_layout.addLayout(controls)
 
         self.status_label = QLabel("Status: Ready")
@@ -71,7 +105,7 @@ class SccmMapperView(QWidget):
         v_splitter = QSplitter(Qt.Vertical)
         main_layout.addWidget(v_splitter)
 
-        # Top row: matched items and machine assignments
+        # Top row: matched + assignments
         h_top = QSplitter(Qt.Horizontal)
         v_splitter.addWidget(h_top)
 
@@ -85,6 +119,8 @@ class SccmMapperView(QWidget):
             ["Software Name", "Standard SCCM Version", "Score"]
         )
         self.tree_matched.setModel(self.model_matched)
+        # Double-click → show InstallationDetailsDialog
+        self.tree_matched.doubleClicked.connect(self._on_matched_double_clicked)
         matched_layout.addWidget(self.tree_matched)
         h_top.addWidget(matched_group)
 
@@ -94,7 +130,7 @@ class SccmMapperView(QWidget):
         assignments_layout.addWidget(self.lbl_assignments)
         h_top.addWidget(assignments_group)
 
-        # Bottom row: review queue, needs packaging, ignored
+        # Bottom row: review, needs packaging, ignored
         h_bottom = QSplitter(Qt.Horizontal)
         v_splitter.addWidget(h_bottom)
 
@@ -105,7 +141,9 @@ class SccmMapperView(QWidget):
         self.tree_review = QTreeView()
         self.tree_review.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.model_review = QStandardItemModel()
-        self.model_review.setHorizontalHeaderLabels(["Workspace Software", "SCCM Match", "Score"])
+        self.model_review.setHorizontalHeaderLabels(
+            ["Workspace Software", "SCCM Match", "Score"]
+        )
         self.tree_review.setModel(self.model_review)
         self.tree_review.setContextMenuPolicy(Qt.CustomContextMenu)
         self.tree_review.customContextMenuRequested.connect(self._on_review_context_menu)
@@ -115,6 +153,8 @@ class SccmMapperView(QWidget):
         pkg_group = QGroupBox("Needs Packaging")
         pkg_layout = QVBoxLayout(pkg_group)
         self.list_pkg = QListWidget()
+        self.list_pkg.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.list_pkg.customContextMenuRequested.connect(self._on_pkg_context_menu)
         pkg_layout.addWidget(self.list_pkg)
         h_bottom.addWidget(pkg_group)
 
@@ -128,19 +168,39 @@ class SccmMapperView(QWidget):
         h_top.setSizes([600, 400])
         h_bottom.setSizes([500, 250, 250])
 
-    # ---------------------------------------------------------------------------
+    # ------------------------------------------------------------------
     # Status helper
-    # ---------------------------------------------------------------------------
+    # ------------------------------------------------------------------
 
     def _set_status(self, text: str) -> None:
         self.status_label.setText(f"Status: {text}")
 
-    # ---------------------------------------------------------------------------
+    # ------------------------------------------------------------------
+    # SCCM connection guard
+    # ------------------------------------------------------------------
+
+    def _ensure_sccm_config_ui(self) -> bool:
+        """Shows the SCCM setup dialog if catalog credentials are missing.
+        Returns True if credentials are now available, False otherwise.
+        """
+        from gui.sccm_mapper_dialogs import SccmSetupDialog
+
+        adapter = ConfigAdapter()
+        creds = adapter.get_sccm_credentials() or {}
+        if not creds.get("server"):
+            dlg = SccmSetupDialog(adapter, self)
+            if dlg.exec():
+                return bool(adapter.get_sccm_credentials() or {})
+            return False
+        return True
+
+    # ------------------------------------------------------------------
     # SCCM sync workflow
-    # ---------------------------------------------------------------------------
+    # ------------------------------------------------------------------
 
     def _on_sync_sccm_clicked(self) -> None:
-        """Triggers a background SCCM catalog sync."""
+        if not self._ensure_sccm_config_ui():
+            return
         self._set_status("Syncing with SCCM...")
         self.btn_sync.setEnabled(False)
         worker = ServiceWorker(self._perform_sccm_sync)
@@ -150,26 +210,19 @@ class SccmMapperView(QWidget):
         self.threadpool.start(worker)
 
     def _perform_sccm_sync(self) -> int:
-        """Decrypts stored SCCM credentials and delegates to the injected sync service."""
         if not self.sccm_service:
             raise RuntimeError("SCCM sync service is not configured.")
         if not self.encryptor:
             raise RuntimeError("Encryptor not initialized — cannot decrypt SCCM credentials.")
-
         adapter = ConfigAdapter()
         creds = adapter.get_sccm_credentials()
         if not creds:
             raise ValueError("SCCM credentials not found in config.ini.")
-
         decrypted_user = self.encryptor.decrypt_data(creds["user"])
         decrypted_password = self.encryptor.decrypt_data(creds["password"])
-
         return self.sccm_service.sync_catalog(
-            creds["server"],
-            creds["database"],
-            creds["schema"],
-            decrypted_user,
-            decrypted_password,
+            creds["server"], creds["database"], creds["schema"],
+            decrypted_user, decrypted_password,
         )
 
     def _on_sync_success(self, count: int) -> None:
@@ -183,12 +236,11 @@ class SccmMapperView(QWidget):
         self._set_status("SCCM sync failed.")
         QMessageBox.critical(self, "Sync Failed", f"An error occurred:\n{value}")
 
-    # ---------------------------------------------------------------------------
+    # ------------------------------------------------------------------
     # CSV ingestion workflow
-    # ---------------------------------------------------------------------------
+    # ------------------------------------------------------------------
 
     def _on_load_csv_clicked(self) -> None:
-        """Prompts for a folder of workspace CSV exports and initiates ingestion."""
         folder = QFileDialog.getExistingDirectory(
             self, "Select Folder Containing Workspace CSVs"
         )
@@ -203,7 +255,6 @@ class SccmMapperView(QWidget):
         self.threadpool.start(worker)
 
     def _perform_csv_ingest(self, folder: str) -> int:
-        """Delegates CSV parsing and DB ingestion to the injected csv_service."""
         if not self.csv_service:
             raise RuntimeError("CSV ingestion service is not configured.")
         return self.csv_service.ingest_csv_data(folder)
@@ -219,9 +270,9 @@ class SccmMapperView(QWidget):
         self._set_status("CSV processing failed.")
         QMessageBox.critical(self, "Processing Failed", f"An error occurred:\n{value}")
 
-    # ---------------------------------------------------------------------------
-    # Software categorization workflow
-    # ---------------------------------------------------------------------------
+    # ------------------------------------------------------------------
+    # Software categorization
+    # ------------------------------------------------------------------
 
     def categorize_software(self) -> None:
         """Dispatches fuzzy-match categorization to a background thread."""
@@ -239,16 +290,15 @@ class SccmMapperView(QWidget):
         self.threadpool.start(worker)
 
     def _perform_categorization(self) -> dict:
-        """Reads software_inventory and sccm_catalog from the DB, then classifies each
-        software item as matched (≥90%), review-needed (75–89%), needs-packaging, or ignored."""
+        """Reads software_inventory and sccm_catalog and classifies each item."""
         if not self.csv_service:
             return {"matched": [], "review": [], "packaging": [], "ignored": []}
 
         db = self.csv_service.db
-
         workspace_df = db.read_sql(
             "SELECT DISTINCT normalized_name, raw_display_name, normalized_version "
-            "FROM software_inventory"
+            "FROM software_inventory WHERE normalized_name != ?"
+            , (IGNORE_TAG,)
         )
         sccm_df = db.read_sql("SELECT Name FROM sccm_catalog")
 
@@ -260,7 +310,6 @@ class SccmMapperView(QWidget):
             "redistributable", "c++", "visual studio", ".net framework", "silverlight",
             "aws", "amazon", "ec2", "nvidia", "teradici", "citrix",
         }
-
         sccm_names = sccm_df["Name"].tolist() if not sccm_df.empty else []
         matched, review, packaging, ignored = [], [], [], []
 
@@ -269,24 +318,22 @@ class SccmMapperView(QWidget):
             normalized = str(row.get("normalized_name") or "")
 
             if any(kw in display.lower() for kw in ignore_keywords):
-                ignored.append(display)
+                ignored.append((display, normalized))
                 continue
 
             if not _RAPIDFUZZ_AVAILABLE or not sccm_names:
-                packaging.append(display)
+                packaging.append((display, normalized))
                 continue
 
-            result = process.extractOne(
-                normalized, sccm_names, scorer=fuzz.token_sort_ratio
-            )
+            result = process.extractOne(normalized, sccm_names, scorer=fuzz.token_sort_ratio)
             if result is None:
-                packaging.append(display)
+                packaging.append((display, normalized))
             elif result[1] >= _FUZZY_CONFIRM_THRESHOLD:
-                matched.append((display, result[0], result[1]))
+                matched.append((display, result[0], result[1], normalized))
             elif result[1] >= _FUZZY_REVIEW_THRESHOLD:
-                review.append((display, result[0], result[1]))
+                review.append((display, result[0], result[1], normalized))
             else:
-                packaging.append(display)
+                packaging.append((display, normalized))
 
         return {
             "matched": matched,
@@ -296,44 +343,183 @@ class SccmMapperView(QWidget):
         }
 
     def _on_categorization_result(self, results: dict) -> None:
-        """Populates all four category panels from the categorization results."""
-        for display, sccm_match, score in results["matched"]:
-            self.model_matched.appendRow([
+        """Populates all four category panels. Stores normalized_name in Qt.UserRole."""
+        for display, sccm_match, score, normalized in results["matched"]:
+            row = [
                 QStandardItem(display),
                 QStandardItem(sccm_match),
                 QStandardItem(str(score)),
-            ])
+            ]
+            row[0].setData(normalized, Qt.UserRole)
+            self.model_matched.appendRow(row)
 
-        for display, sccm_match, score in results["review"]:
-            self.model_review.appendRow([
+        for display, sccm_match, score, normalized in results["review"]:
+            row = [
                 QStandardItem(display),
                 QStandardItem(sccm_match),
                 QStandardItem(str(score)),
-            ])
+            ]
+            row[0].setData(normalized, Qt.UserRole)
+            self.model_review.appendRow(row)
 
-        for name in results["packaging"]:
-            self.list_pkg.addItem(name)
+        for display, normalized in results["packaging"]:
+            item = QListWidgetItem(display)
+            item.setData(Qt.UserRole, normalized)
+            self.list_pkg.addItem(item)
 
-        for name in results["ignored"]:
-            self.list_ign.addItem(name)
+        for display, normalized in results["ignored"]:
+            item = QListWidgetItem(display)
+            item.setData(Qt.UserRole, normalized)
+            self.list_ign.addItem(item)
 
         total = sum(len(v) for v in results.values())
         self._set_status(f"Categorized {total} software items.")
 
+    # ------------------------------------------------------------------
+    # Context menus
+    # ------------------------------------------------------------------
+
     def _on_review_context_menu(self, pos) -> None:
-        """Provides confirm/reject actions for fuzzy-match review items via right-click."""
+        """Confirm/reject actions for fuzzy review items."""
         index = self.tree_review.indexAt(pos)
         if not index.isValid():
             return
+        menu = QMenu(self)
+        confirm_act = menu.addAction("✅ Confirm Match")
+        reject_act = menu.addAction("📦 Move to Needs Packaging")
+        ignore_act = menu.addAction("🚫 Mark as Ignored")
+        action = menu.exec(self.tree_review.viewport().mapToGlobal(pos))
+        row_idx = self.tree_review.indexAt(pos).row()
+        if action == confirm_act:
+            self.model_review.removeRow(row_idx)
+        elif action == reject_act:
+            item_text = self.model_review.item(row_idx, 0).text()
+            normalized = self.model_review.item(row_idx, 0).data(Qt.UserRole) or ""
+            pkg_item = QListWidgetItem(item_text)
+            pkg_item.setData(Qt.UserRole, normalized)
+            self.list_pkg.addItem(pkg_item)
+            self.model_review.removeRow(row_idx)
+        elif action == ignore_act:
+            normalized = self.model_review.item(row_idx, 0).data(Qt.UserRole) or ""
+            self._update_assignment(normalized, group_id=None, ignore=True)
+            self.model_review.removeRow(row_idx)
+
+    def _on_pkg_context_menu(self, pos) -> None:
+        """Assign to Group / Group Together / Mark Ignored on the Needs Packaging list."""
+        from gui.sccm_mapper_dialogs import GroupChooserDialog
+
+        item = self.list_pkg.itemAt(pos)
+        if not item:
+            return
+        normalized = item.data(Qt.UserRole) or ""
 
         menu = QMenu(self)
-        confirm_act = menu.addAction("Confirm Match")
-        reject_act = menu.addAction("Reject — Move to Needs Packaging")
+        assign_act = menu.addAction("🗂 Assign to Group…")
+        ignore_act = menu.addAction("🚫 Mark as Ignored")
+        action = menu.exec(self.list_pkg.viewport().mapToGlobal(pos))
 
-        action = menu.exec(self.tree_review.viewport().mapToGlobal(pos))
-        if action == confirm_act:
-            self.model_review.removeRow(index.row())
-        elif action == reject_act:
-            item_text = self.model_review.item(index.row(), 0).text()
-            self.list_pkg.addItem(item_text)
-            self.model_review.removeRow(index.row())
+        if action == assign_act:
+            if not self.csv_service:
+                return
+            dlg = GroupChooserDialog(self.csv_service.db, self)
+            if dlg.exec():
+                gid = dlg.selected_group_id
+                if gid is not None:
+                    self._update_assignment(normalized, group_id=gid, ignore=False)
+                    self.list_pkg.takeItem(self.list_pkg.row(item))
+        elif action == ignore_act:
+            self._update_assignment(normalized, group_id=None, ignore=True)
+            ign_item = QListWidgetItem(item.text())
+            ign_item.setData(Qt.UserRole, normalized)
+            self.list_ign.addItem(ign_item)
+            self.list_pkg.takeItem(self.list_pkg.row(item))
+
+    # ------------------------------------------------------------------
+    # Double-click: show installation details
+    # ------------------------------------------------------------------
+
+    def _on_matched_double_clicked(self, index) -> None:
+        """Opens InstallationDetailsDialog for the double-clicked matched software."""
+        from gui.sccm_mapper_dialogs import InstallationDetailsDialog
+
+        row = index.row()
+        item = self.model_matched.item(row, 0)
+        if not item or not self.csv_service:
+            return
+        normalized = item.data(Qt.UserRole) or item.text()
+        dlg = InstallationDetailsDialog(normalized, self.csv_service.db, self)
+        dlg.exec()
+
+    # ------------------------------------------------------------------
+    # Group management
+    # ------------------------------------------------------------------
+
+    def _on_manage_groups_clicked(self) -> None:
+        """Opens the GroupManagerDialog for CRUD on software_groups."""
+        from gui.sccm_mapper_dialogs import GroupManagerDialog
+
+        if not self.csv_service:
+            QMessageBox.warning(self, "Not Ready", "Load CSV data first.")
+            return
+        dlg = GroupManagerDialog(self.csv_service.db, self)
+        dlg.exec()
+
+    # ------------------------------------------------------------------
+    # Save assignments
+    # ------------------------------------------------------------------
+
+    def _on_save_assignments_clicked(self) -> None:
+        """Persists all current ignored items to the software_inventory table."""
+        if not self.csv_service:
+            QMessageBox.warning(self, "Not Ready", "No database connected.")
+            return
+        saved = 0
+        for i in range(self.list_ign.count()):
+            item = self.list_ign.item(i)
+            normalized = item.data(Qt.UserRole) or ""
+            if normalized:
+                self._update_assignment(normalized, group_id=None, ignore=True)
+                saved += 1
+        self._set_status(f"Saved {saved} ignored assignments.")
+        QMessageBox.information(self, "Saved", f"{saved} assignment(s) saved to database.")
+
+    def _update_assignment(
+        self, normalized_name: str, group_id: Optional[int], ignore: bool
+    ) -> None:
+        """Updates software_inventory with group assignment or ignore flag."""
+        if not self.csv_service:
+            return
+        db = self.csv_service.db
+        if ignore:
+            try:
+                db.execute_query(
+                    "UPDATE software_inventory SET needs_review=0, normalized_name=? "
+                    "WHERE normalized_name=?",
+                    (IGNORE_TAG, normalized_name),
+                )
+            except Exception as exc:
+                logging.error(f"_update_assignment (ignore) failed: {exc}")
+        elif group_id is not None:
+            try:
+                db.execute_query(
+                    "UPDATE software_inventory SET group_id=?, needs_review=0 "
+                    "WHERE normalized_name=?",
+                    (group_id, normalized_name),
+                )
+            except Exception as exc:
+                logging.error(f"_update_assignment (group) failed: {exc}")
+
+    def _fetch_installation_details(self, normalized_name: str) -> list:
+        """Returns rows of (computer_name, user_name, version) for a given software."""
+        if not self.csv_service:
+            return []
+        try:
+            df = self.csv_service.db.read_sql(
+                "SELECT s.computer_name, s.user_name, s.raw_display_version "
+                "FROM software_inventory s WHERE s.normalized_name=?",
+                (normalized_name,),
+            )
+            return df.to_dict("records")
+        except Exception as exc:
+            logging.error(f"_fetch_installation_details failed: {exc}")
+            return []
