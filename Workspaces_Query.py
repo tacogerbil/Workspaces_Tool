@@ -23,17 +23,17 @@ def main():
 
     # --- Replicate original startup credential prompts ---
     db_password, ok = QInputDialog.getText(None, "Unlock Database", "Enter Master Password to decrypt Database and Config:", QLineEdit.Password)
-    if not ok or not db_password.strip():
+    if not ok or not db_password:
         QMessageBox.critical(None, "Aborted", "Master password is required. Exiting application.")
         sys.exit(1)
 
     ad_user, ok = QInputDialog.getText(None, "AD Login", "Enter your Active Directory Username (domain\\user):")
-    if not ok or not ad_user.strip():
+    if not ok or not ad_user:
         QMessageBox.critical(None, "Aborted", "AD Username is required. Exiting application.")
         sys.exit(1)
 
     ad_password, ok = QInputDialog.getText(None, "AD Login", "Enter your Active Directory Password:", QLineEdit.Password)
-    if not ok or not ad_password.strip():
+    if not ok or not ad_password:
         QMessageBox.critical(None, "Aborted", "AD Password is required. Exiting application.")
         sys.exit(1)
 
