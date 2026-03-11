@@ -143,7 +143,7 @@ class SqliteBackend(DbBackend):
         with self._connect() as conn:
             cur = conn.cursor()
             cur.execute(f"PRAGMA table_info({table})")
-            return any(row[1] == column for row in cur.fetchall())
+            return any(str(row[1]).lower() == column.lower() for row in cur.fetchall())
 
     def add_column_if_not_exists(
         self, table: str, column: str, col_type: str

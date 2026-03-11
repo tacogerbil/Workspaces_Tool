@@ -1,0 +1,35 @@
+=== ARCHIVE QUERY ===
+SELECT
+    ha.FinalStatus AS AWSStatus,
+    ha.WorkspaceId AS WorkspaceId,
+    ha.ComputerName AS ComputerName,
+    ha.UserName AS UserName,
+    ha.Company AS Company,
+    ha.LastUserStatus AS UserADStatus,
+    ha.LastDeviceStatus AS DeviceADStatus,
+    ha.LastDaysInactive AS DaysInactive,
+    ha.OriginalCreationDate AS OriginalCreationDate,
+    ha.Notes AS Notes,
+    ha.RunningMode AS RunningMode,
+    ha.DirectoryId AS DirectoryId,
+    'ARCHIVED' AS RecordType
+FROM historical_archives ha
+
+=== LIVE QUERY ===
+SELECT
+    w.AWSStatus AS AWSStatus,
+    w.WorkspaceId AS WorkspaceId,
+    w.ComputerName AS ComputerName,
+    w.UserName AS UserName,
+    u.Company AS Company,
+    u.UserADStatus AS UserADStatus,
+    d.DeviceADStatus AS DeviceADStatus,
+    w.DaysInactive AS DaysInactive,
+    w.OriginalCreationDate AS OriginalCreationDate,
+    u.Notes AS Notes,
+    w.RunningMode AS RunningMode,
+    w.DirectoryId AS DirectoryId,
+    'LIVE' AS RecordType
+FROM workspaces w
+LEFT JOIN ad_devices d ON LOWER(w.ComputerName) = LOWER(d.ComputerName)
+LEFT JOIN ad_users u ON LOWER(w.UserName) = LOWER(u.UserName)

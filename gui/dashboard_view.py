@@ -309,6 +309,8 @@ class DashboardView(QWidget):
         except ValueError:
             col_index = 0
         order = Qt.AscendingOrder if self._sort_direction == "ASC" else Qt.DescendingOrder
+        # Explicitly set the UI's header indicator so it doesn't visually reset
+        self._tree.header().setSortIndicator(col_index, order)
         self._proxy.sort(col_index, order)
 
     # ------------------------------------------------------------------
@@ -374,13 +376,21 @@ class DashboardView(QWidget):
             history_map = self._fetch_history_map()
 
             # 2. Build and run queries dynamically from the registry
-            live_df = self._db.read_sql(build_live_query(active))
-            phantom_df = self._db.read_sql(build_phantom_query(active))
+            live_query = build_live_query(active)
+            logging.info(f"LIVE QUERY:\n{live_query}")
+            live_df = self._db.read_sql(live_query)
+            
+            phantom_query = build_phantom_query(active)
+            phantom_df = self._db.read_sql(phantom_query)
 
             frames = [f for f in [live_df, phantom_df] if not f.empty]
+            logging.info(f"Live DF shape: {live_df.shape}, Phantom DF shape: {phantom_df.shape}")
 
             if self._show_archived:
-                archived_df = self._db.read_sql(build_archived_query(active))
+                archived_query = build_archived_query(active)
+                logging.info(f"ARCHIVED QUERY:\n{archived_query}")
+                archived_df = self._db.read_sql(archived_query)
+                logging.info(f"Archived DF shape: {archived_df.shape}")
                 if not archived_df.empty:
                     frames.append(archived_df)
 
@@ -395,9 +405,13 @@ class DashboardView(QWidget):
                 df, active, self._encryptor, self._aliases,
                 self._pricing, usage_map, history_map,
             )
+            logging.info(f"Final DF shape after enrichment: {df.shape}")
 
         except Exception as exc:
             logging.error("Dashboard DB refresh failed: %s", exc, exc_info=True)
+            print(f"FATAL ERROR IN DASHBOARD DB REFRESH: {exc}")
+            import traceback
+            traceback.print_exc()
             return
 
         self._update_kpis(df)
@@ -507,11 +521,13 @@ class DashboardView(QWidget):
         record_type = row.get("RecordType", "LIVE")
 
         if record_type == "ARCHIVED":
-            grey = QColor("grey")
+            bg = QColor("#f0f0f0")
+            fg = QColor("#a0a0a0")
             fnt = QFont("Segoe UI", 9)
             fnt.setItalic(True)
             for item in items:
-                item.setForeground(grey)
+                item.setBackground(bg)
+                item.setForeground(fg)
                 item.setFont(fnt)
             return
 
@@ -528,26 +544,28 @@ class DashboardView(QWidget):
         # status is disabled/missing.  The COALESCE fallback strings
         # ('NOT_FOUND_IN_AD', 'MISSING_IN_AD') are also used when the table is
         # empty (never synced), so we guard with a NULL-like presence check.
-        user_status   = row.get("UserADStatus",   "") or ""
-        device_status = row.get("DeviceADStatus", "") or ""
+        user_status   = str(row.get("UserADStatus",   "") or "").upper()
+        device_status = str(row.get("DeviceADStatus", "") or "").upper()
 
-        # Confirmed AD-disabled accounts → dark red text
+        # Confirmed AD-disabled accounts → dark red background
         if user_status == "DISABLED" or device_status == "DISABLED":
             for item in items:
-                item.setForeground(QColor("#A52A2A"))
+                item.setBackground(QColor("#8B0000"))
+                item.setForeground(QColor("white"))
             return
 
-        # Confirmed user not found in AD after a real sync → bright red text
+        # Confirmed user not found in AD after a real sync → very dark red background
         if user_status == "NOT_FOUND_IN_AD":
             for item in items:
-                item.setForeground(QColor("#CC0000"))
+                item.setBackground(QColor("#400000"))
+                item.setForeground(QColor("white"))
             return
 
-        # Confirmed device not found in AD after a real sync → light red bg
+        # Confirmed device not found in AD after a real sync → brown/black bg
         if device_status == "MISSING_IN_AD":
             for item in items:
-                item.setBackground(QColor("#FFEBE6"))
-                item.setForeground(QColor("black"))
+                item.setBackground(QColor("#331a00"))
+                item.setForeground(QColor("white"))
             return
 
         # Company banding (default live rows)

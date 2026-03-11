@@ -164,7 +164,7 @@ COLUMN_REGISTRY: dict[str, ColumnDef] = {
 
     "DeviceADStatus": ColumnDef(
         display_name="Device AD Status",
-        sql_expr="d.DeviceADStatus",          # NULL when no ad_devices row matched
+        sql_expr="COALESCE(d.DeviceADStatus, 'MISSING_IN_AD')",          # NULL when no ad_devices row matched
         sql_alias="DeviceADStatus",
         requires_joins=frozenset({"d"}),
         archived_sql_expr="ha.LastDeviceStatus",
@@ -189,7 +189,7 @@ COLUMN_REGISTRY: dict[str, ColumnDef] = {
     ),
     "UserADStatus": ColumnDef(
         display_name="User AD Status",
-        sql_expr="u.UserADStatus",            # NULL when no ad_users row matched
+        sql_expr="COALESCE(u.UserADStatus, 'NOT_FOUND_IN_AD')",            # NULL when no ad_users row matched
         sql_alias="UserADStatus",
         requires_joins=frozenset({"u"}),
         archived_sql_expr="ha.LastUserStatus",
@@ -208,7 +208,7 @@ COLUMN_REGISTRY: dict[str, ColumnDef] = {
         sql_expr="u.Company",
         sql_alias="Company",
         requires_joins=frozenset({"u"}),
-        archived_sql_expr="ha.Company",
+        archived_sql_expr="COALESCE(u.Company, ha.Company)",
         requires_decrypt=True,
         is_visible_by_default=True,
     ),
@@ -217,7 +217,7 @@ COLUMN_REGISTRY: dict[str, ColumnDef] = {
         sql_expr="u.Notes",
         sql_alias="Notes",
         requires_joins=frozenset({"u"}),
-        archived_sql_expr="ha.Notes",
+        archived_sql_expr="COALESCE(u.Notes, ha.Notes)",
         is_visible_by_default=True,
     ),
 
@@ -423,7 +423,8 @@ def build_archived_query(active_columns: list[str]) -> str:
     _sep = ",\n    "
     return (
         "SELECT\n    " + _sep.join(select_parts) + "\n"
-        "FROM historical_archives ha"
+        "FROM historical_archives ha\n"
+        "LEFT JOIN ad_users u ON LOWER(ha.UserName) = LOWER(u.UserName)"
     )
 
 
