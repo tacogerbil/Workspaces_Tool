@@ -291,9 +291,9 @@ def _build_join_clauses(active_columns: list[str]) -> str:
 
     parts: list[str] = []
     if "d" in needed:
-        parts.append("LEFT JOIN ad_devices d ON w.ComputerName = d.ComputerName")
+        parts.append("LEFT JOIN ad_devices d ON LOWER(w.ComputerName) = LOWER(d.ComputerName)")
     if "u" in needed:
-        parts.append("LEFT JOIN ad_users u ON w.UserName = u.UserName")
+        parts.append("LEFT JOIN ad_users u ON LOWER(w.UserName) = LOWER(u.UserName)")
     # cnh and uh are used only in subqueries (phantom + computed), not top-level JOINs
     return "\n".join(parts)
 
