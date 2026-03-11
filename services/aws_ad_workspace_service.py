@@ -330,14 +330,19 @@ class AwsAdWorkspaceService:
         if mode == "full":
             ad_cfg = self._config.get_ad_config()
             if ad_cfg.get("server") and self._ad_user and self._ad_password:
-                ad_devices, ad_users = fetch_ad_data(
-                    aws_data=aws_data,
-                    ad_server=ad_cfg["server"],
-                    search_base=ad_cfg.get("search_base", ""),
-                    ad_user=self._ad_user,
-                    ad_password=self._ad_password,
-                    encryptor=self._encryptor,
-                )
+                try:
+                    ad_devices, ad_users = fetch_ad_data(
+                        aws_data=aws_data,
+                        ad_server=ad_cfg["server"],
+                        search_base=ad_cfg.get("search_base", ""),
+                        ad_user=self._ad_user,
+                        ad_password=self._ad_password,
+                        encryptor=self._encryptor,
+                    )
+                except Exception as exc:
+                    logging.error(f"AD fetch aborted due to connection/login failure: {exc}")
+                    # Allow AWS data to still persist even if AD login failed
+                    ad_devices, ad_users = {}, {}
             else:
                 logging.warning("AD config/credentials incomplete — skipping AD fetch.")
 

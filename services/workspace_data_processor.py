@@ -30,8 +30,7 @@ def standardize_alias_key(text: str) -> str:
 def load_aliases(scripts_dir: Path) -> Dict[str, str]:
     """Loads and normalises company name aliases from aliases.json."""
     alias_path = scripts_dir / "aliases.json"
-    if not alias_path.exists():
-        logging.warning(f"aliases.json not found at {alias_path}.")
+    if not alias_path.exists() or alias_path.stat().st_size == 0:
         return {}
     try:
         with open(alias_path, "r") as fh:
@@ -49,8 +48,7 @@ def load_aliases(scripts_dir: Path) -> Dict[str, str]:
 def load_pricing_data(scripts_dir: Path) -> Optional[Dict]:
     """Loads pricing rules from pricing.json next to the entry script."""
     pricing_path = scripts_dir / "pricing.json"
-    if not pricing_path.exists():
-        logging.warning(f"pricing.json not found at {pricing_path}.")
+    if not pricing_path.exists() or pricing_path.stat().st_size == 0:
         return None
     try:
         with open(pricing_path, "r") as fh:
