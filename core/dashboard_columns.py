@@ -170,7 +170,7 @@ COLUMN_REGISTRY: dict[str, ColumnDef] = {
 
     "DeviceADStatus": ColumnDef(
         display_name="Device AD Status",
-        sql_expr="COALESCE(d.DeviceADStatus, 'MISSING_IN_AD')",
+        sql_expr="d.DeviceADStatus",          # NULL when no ad_devices row matched
         sql_alias="DeviceADStatus",
         requires_joins=frozenset({"d"}),
         archived_sql_expr="ha.LastDeviceStatus",
@@ -195,7 +195,7 @@ COLUMN_REGISTRY: dict[str, ColumnDef] = {
     ),
     "UserADStatus": ColumnDef(
         display_name="User AD Status",
-        sql_expr="COALESCE(u.UserADStatus, 'NOT_FOUND_IN_AD')",
+        sql_expr="u.UserADStatus",            # NULL when no ad_users row matched
         sql_alias="UserADStatus",
         requires_joins=frozenset({"u"}),
         archived_sql_expr="ha.LastUserStatus",

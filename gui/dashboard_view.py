@@ -151,7 +151,7 @@ class DashboardView(QWidget):
 
         self._refresh_from_db()
         if self._service:
-            self._trigger_sync(mode="aws_only")
+            self._trigger_sync(mode="full")
 
     # ------------------------------------------------------------------
     # Config helpers
@@ -209,10 +209,10 @@ class DashboardView(QWidget):
 
         # KPI cards
         kpi_row = QHBoxLayout()
-        self._lbl_total = self._make_kpi_card("Total Workspaces", kpi_row, "#1e3a5f")
-        self._lbl_available = self._make_kpi_card("Available", kpi_row, "#1e4d1e")
-        self._lbl_error = self._make_kpi_card("Error / Stopped", kpi_row, "#5a1e1e")
-        self._lbl_pending = self._make_kpi_card("Pending Migration", kpi_row, "#5a4200")
+        self._lbl_total     = self._make_kpi_card("Total Workspaces", kpi_row, "#1e3a5f")
+        self._lbl_available = self._make_kpi_card("Available",         kpi_row, "#1e4d1e")
+        self._lbl_error     = self._make_kpi_card("Error",             kpi_row, "#5a1e1e")
+        self._lbl_stopped   = self._make_kpi_card("Stopped",           kpi_row, "#4a2800")
         root.addLayout(kpi_row)
 
         # Optional chart
@@ -437,19 +437,17 @@ class DashboardView(QWidget):
             self._lbl_total.setText("0")
             self._lbl_available.setText("0")
             self._lbl_error.setText("0")
-            self._lbl_pending.setText("0")
+            self._lbl_stopped.setText("0")
             return
 
         live = df[df["RecordType"] == "LIVE"] if "RecordType" in df.columns else df
         aws = "AWSStatus"
-        mig = "migration_status"
 
         self._lbl_total.setText(str(len(live)))
         if aws in live.columns:
             self._lbl_available.setText(str(int((live[aws] == "AVAILABLE").sum())))
-            self._lbl_error.setText(str(int(live[aws].isin(["ERROR", "STOPPED"]).sum())))
-        if mig in live.columns:
-            self._lbl_pending.setText(str(int((live[mig] == "PENDING").sum())))
+            self._lbl_error.setText(str(int((live[aws] == "ERROR").sum())))
+            self._lbl_stopped.setText(str(int((live[aws] == "STOPPED").sum())))
 
         if _PYQTGRAPH_AVAILABLE and aws in live.columns:
             counts = live[aws].value_counts()
@@ -517,28 +515,34 @@ class DashboardView(QWidget):
                 item.setBackground(phantom_bg)
             return
 
-        # LIVE row color rules
-        user_status = str(row.get("UserADStatus", ""))
-        device_status = str(row.get("DeviceADStatus", ""))
+        # LIVE row color rules.
+        # Only apply red coloring when a value was explicitly written by a real
+        # AD sync — i.e. the JOIN *found* a row in ad_users/ad_devices but the
+        # status is disabled/missing.  The COALESCE fallback strings
+        # ('NOT_FOUND_IN_AD', 'MISSING_IN_AD') are also used when the table is
+        # empty (never synced), so we guard with a NULL-like presence check.
+        user_status   = row.get("UserADStatus",   "") or ""
+        device_status = row.get("DeviceADStatus", "") or ""
 
-        if user_status in ("DISABLED",) or device_status == "DISABLED":
-            dark_red = QColor("#A52A2A")
+        # Confirmed AD-disabled accounts → dark red text
+        if user_status == "DISABLED" or device_status == "DISABLED":
             for item in items:
-                item.setForeground(dark_red)
+                item.setForeground(QColor("#A52A2A"))
             return
 
+        # Confirmed user not found in AD after a real sync → bright red text
         if user_status == "NOT_FOUND_IN_AD":
             for item in items:
                 item.setForeground(QColor("#CC0000"))
             return
 
+        # Confirmed device not found in AD after a real sync → light red bg
         if device_status == "MISSING_IN_AD":
-            light_red = QColor("#FFEBE6")
             for item in items:
-                item.setBackground(light_red)
+                item.setBackground(QColor("#FFEBE6"))
             return
 
-        # Company banding
+        # Company banding (default live rows)
         company = str(row.get("Company", "") or "")
         if company and company != "None":
             color = self._company_color(company)

@@ -78,12 +78,8 @@ class UnifiedMainWindow(QMainWindow):
         # 3. Encryption
         self.encryptor = self._build_encryptor()
 
-        # 4. Schema enforcement — ensures all columns exist in both DBs
-        #    Safe to call every startup: missing columns are added, existing ones skipped.
-        ensure_schema(self.db_adapter)
-        ensure_schema(self.sccm_db_adapter, SOFTWARE_TABLE_SCHEMAS)
-
-        # 5. Services
+        # 4. Services (AwsAdWorkspaceService._ensure_tables() runs inside __init__,
+        #    creating all DB tables. ensure_schema() MUST come after this.)
         self.workspace_service = AwsAdWorkspaceService(
             db=self.db_adapter,
             config=self.config_adapter,
@@ -93,6 +89,11 @@ class UnifiedMainWindow(QMainWindow):
         )
         self.sccm_service = SccmSyncService(SccmSqlAdapter(), self.sccm_db_adapter)
         self.csv_service = CsvIngestionService(self.sccm_db_adapter)
+
+        # 5. Schema enforcement — runs AFTER _ensure_tables() so tables exist.
+        #    Adds any columns missing from older DB files (ALTER TABLE, safe to re-run).
+        ensure_schema(self.db_adapter)
+        ensure_schema(self.sccm_db_adapter, SOFTWARE_TABLE_SCHEMAS)
 
         # 6. UI
         self._setup_ui()
@@ -176,7 +177,21 @@ class UnifiedMainWindow(QMainWindow):
             ),
             "📊 Dashboard",
         )
-        tabs.addTab(
+
+        # ── Migration tab (Workspace Migrator is the entry point;
+        #    SCCM Mapper is a supporting tool used during migration)
+        migration_widget = QWidget()
+        migration_layout = QVBoxLayout(migration_widget)
+        migration_layout.setContentsMargins(0, 4, 0, 0)
+        migration_tabs = QTabWidget()
+        migration_tabs.addTab(
+            WorkspaceMigratorView(
+                workspace_service=self.workspace_service,
+                config_adapter=self.config_adapter,
+            ),
+            "🔄 Workspace Migrator",
+        )
+        migration_tabs.addTab(
             SccmMapperView(
                 encryptor=self.encryptor,
                 sccm_service=self.sccm_service,
@@ -184,16 +199,12 @@ class UnifiedMainWindow(QMainWindow):
             ),
             "📦 SCCM Mapper",
         )
+        migration_layout.addWidget(migration_tabs)
+        tabs.addTab(migration_widget, "🔀 Migration")
+
         tabs.addTab(
             WorkspaceCreatorView(workspace_service=self.workspace_service),
             "➕ Workspace Creator",
-        )
-        tabs.addTab(
-            WorkspaceMigratorView(
-                workspace_service=self.workspace_service,
-                config_adapter=self.config_adapter,
-            ),
-            "🔄 Workspace Migrator",
         )
         tabs.addTab(
             PreferencesView(config=self.config_adapter),
