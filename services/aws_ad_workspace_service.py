@@ -640,15 +640,19 @@ class AwsAdWorkspaceService:
     def _apply_alias(
         self, rec: Dict, aliases: Dict, already_decrypted: bool = False
     ) -> None:
-        company = rec.get("Company") if already_decrypted else self._decrypt(rec.get("Company"))
+        raw = rec.get("Company")
+        # pandas NaN comes through as float; treat non-string as absent
+        if not isinstance(raw, str):
+            raw = None
+        company = raw if already_decrypted else self._decrypt(raw)
         if company:
             rec["Company"] = aliases.get(standardize_alias_key(company), company)
         else:
             rec["Company"] = company
 
     def _decrypt(self, value: Optional[str]) -> Optional[str]:
-        if not value or not self._encryptor:
-            return value
+        if not isinstance(value, str) or not self._encryptor:
+            return None if not isinstance(value, str) else value
         try:
             return self._encryptor.decrypt_data(value)
         except Exception:
