@@ -28,14 +28,23 @@ def main():
     ad_cfg = config_adapter.get_ad_config()
     db_cfg = config_adapter.get_db_backend_config()
     
-    # If the core DB path or AD server is missing, force the Settings dialog first
-    if not ad_cfg.get("server") or not db_cfg.get("path"):
+    # Force the Settings dialog when:
+    #   - AD server is not configured, OR
+    #   - the DB file doesn't actually exist on disk
+    # NOTE: get_db_backend_config() always returns a fallback path string, so
+    # checking path != "" is not enough — we must verify the file exists.
+    from pathlib import Path as _Path
+    db_path = db_cfg.get("path", "")
+    db_ready = bool(db_path) and _Path(db_path).exists()
+    if not ad_cfg.get("server") or not db_ready:
         setup_dialog = SettingsDialog(config_adapter, is_setup_mode=True)
         setup_dialog.exec()
-        
-        # Re-check. If they canceled the setup without saving mandatory fields, abort.
+
+        # Re-check after setup; abort if still incomplete.
         ad_cfg = config_adapter.get_ad_config()
-        if not ad_cfg.get("server"):
+        db_cfg = config_adapter.get_db_backend_config()
+        db_path = db_cfg.get("path", "")
+        if not ad_cfg.get("server") or not _Path(db_path).exists():
             QMessageBox.critical(None, "Aborted", "Configuration setup was incomplete. Exiting application.")
             sys.exit(1)
 
