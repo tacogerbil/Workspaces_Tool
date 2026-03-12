@@ -570,7 +570,40 @@ def enrich_dataframe(
             lambda ws_id: ", ".join(history_map.get(ws_id, []))
         )
 
+    # 7. Human-readable timestamp columns
+    for ts_col in ("UserLastActive", "LastStateCheck"):
+        if ts_col in active_columns and ts_col in df.columns:
+            df[ts_col] = df[ts_col].apply(_format_timestamp)
+
     return df
+
+
+def _format_timestamp(value: Any) -> str:
+    """Convert an ISO 8601 timestamp to '15 Jan 2024  10:30 UTC', or '' if absent."""
+    if not value or (isinstance(value, float) and pd.isna(value)):
+        return ""
+    try:
+        from datetime import datetime, timezone
+        s = str(value).strip()
+        # Handle both offset-aware ("...+00:00") and naive strings
+        for fmt in (
+            "%Y-%m-%dT%H:%M:%S.%f%z",
+            "%Y-%m-%dT%H:%M:%S%z",
+            "%Y-%m-%dT%H:%M:%S.%f",
+            "%Y-%m-%dT%H:%M:%S",
+        ):
+            try:
+                dt = datetime.strptime(s, fmt)
+                break
+            except ValueError:
+                continue
+        else:
+            return s  # unparseable — return as-is
+        if dt.tzinfo:
+            dt = dt.astimezone(timezone.utc)
+        return f"{dt.day} {dt.strftime('%b %Y  %H:%M')} UTC"
+    except Exception:
+        return str(value)
 
 
 def _safe_decrypt(value: Any, encryptor: Any) -> Any:
