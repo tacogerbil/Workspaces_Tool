@@ -174,22 +174,37 @@ _MSSQL_DDLS = {
 }
 
 
-def _connect_mssql(server: str, database: str, port: int = 1433) -> pyodbc.Connection:
-    conn_str = (
+def _connect_mssql(
+    server: str,
+    database: str,
+    port: int = 1433,
+    username: str = "",
+    password: str = "",
+) -> pyodbc.Connection:
+    base = (
         f"DRIVER={{ODBC Driver 17 for SQL Server}};"
         f"SERVER={server},{port};"
         f"DATABASE={database};"
-        "Trusted_Connection=yes;"
         "Encrypt=yes;"
         "TrustServerCertificate=yes;"
     )
+    if username:
+        conn_str = base + f"UID={username};PWD={password};"
+    else:
+        conn_str = base + "Trusted_Connection=yes;"
     return pyodbc.connect(conn_str, timeout=30)
 
 
-def test_connection(server: str, database: str, port: int = 1433) -> tuple[bool, str]:
+def test_connection(
+    server: str,
+    database: str,
+    port: int = 1433,
+    username: str = "",
+    password: str = "",
+) -> tuple[bool, str]:
     """Test MSSQL connectivity. Returns (success, message)."""
     try:
-        conn = _connect_mssql(server, database, port)
+        conn = _connect_mssql(server, database, port, username, password)
         conn.close()
         return True, f"Connected to {server}/{database} successfully."
     except Exception as exc:
@@ -214,11 +229,17 @@ def get_sqlite_table_info(sqlite_path: str) -> list[dict]:
     return found
 
 
-def get_mssql_table_info(server: str, database: str, port: int = 1433) -> list[dict]:
+def get_mssql_table_info(
+    server: str,
+    database: str,
+    port: int = 1433,
+    username: str = "",
+    password: str = "",
+) -> list[dict]:
     """Return [{name, row_count}] for all known tables found in an MSSQL database."""
     found = []
     try:
-        conn = _connect_mssql(server, database, port)
+        conn = _connect_mssql(server, database, port, username, password)
         cur = conn.cursor()
         for table in _MSSQL_DDLS:
             if _table_exists_mssql(cur, table):
@@ -240,6 +261,10 @@ def migrate_mssql_to_mssql(
     dst_port: int,
     batch_size: int = 500,
     progress_fn: Optional[callable] = None,
+    src_username: str = "",
+    src_password: str = "",
+    dst_username: str = "",
+    dst_password: str = "",
 ) -> None:
     """Copy all known tables from one SQL Server database to another.
 
@@ -254,8 +279,8 @@ def migrate_mssql_to_mssql(
     _log(f"Source MSSQL: {src_server},{src_port}/{src_database}")
     _log(f"Target MSSQL: {dst_server},{dst_port}/{dst_database}")
 
-    src_conn = _connect_mssql(src_server, src_database, src_port)
-    dst_conn = _connect_mssql(dst_server, dst_database, dst_port)
+    src_conn = _connect_mssql(src_server, src_database, src_port, src_username, src_password)
+    dst_conn = _connect_mssql(dst_server, dst_database, dst_port, dst_username, dst_password)
     src_cur  = src_conn.cursor()
     dst_cur  = dst_conn.cursor()
 
@@ -346,6 +371,8 @@ def migrate(
     port: int = 1433,
     batch_size: int = 500,
     progress_fn: Optional[callable] = None,
+    username: str = "",
+    password: str = "",
 ) -> None:
     """Copies all known tables from a SQLite file to a MSSQL database.
 
@@ -372,7 +399,7 @@ def migrate(
 
     _log(f"Found {len(tables_to_migrate)} table(s): {', '.join(tables_to_migrate)}")
 
-    mssql_conn = _connect_mssql(server, database, port)
+    mssql_conn = _connect_mssql(server, database, port, username, password)
     mssql_cur = mssql_conn.cursor()
 
     with sqlite3.connect(sqlite_path) as sqlite_conn:

@@ -85,12 +85,16 @@ class _MigrationWorker(QRunnable):
         server: str,
         database: str,
         port: int,
+        username: str = "",
+        password: str = "",
     ) -> None:
         super().__init__()
         self._sqlite_path = sqlite_path
         self._server = server
         self._database = database
         self._port = port
+        self._username = username
+        self._password = password
         self.signals = _MigrationSignals()
 
     def run(self) -> None:
@@ -101,6 +105,8 @@ class _MigrationWorker(QRunnable):
                 database=self._database,
                 port=self._port,
                 progress_fn=lambda msg: self.signals.log.emit(msg),
+                username=self._username,
+                password=self._password,
             )
             self.signals.done.emit(True)
         except Exception as exc:
@@ -114,10 +120,14 @@ class _MssqlToMssqlWorker(QRunnable):
         self,
         src_server: str, src_database: str, src_port: int,
         dst_server: str, dst_database: str, dst_port: int,
+        src_username: str = "", src_password: str = "",
+        dst_username: str = "", dst_password: str = "",
     ) -> None:
         super().__init__()
         self._src = (src_server, src_database, src_port)
         self._dst = (dst_server, dst_database, dst_port)
+        self._src_creds = (src_username, src_password)
+        self._dst_creds = (dst_username, dst_password)
         self.signals = _MigrationSignals()
 
     def run(self) -> None:
@@ -125,6 +135,10 @@ class _MssqlToMssqlWorker(QRunnable):
             migrate_mssql_to_mssql(
                 *self._src, *self._dst,
                 progress_fn=lambda msg: self.signals.log.emit(msg),
+                src_username=self._src_creds[0],
+                src_password=self._src_creds[1],
+                dst_username=self._dst_creds[0],
+                dst_password=self._dst_creds[1],
             )
             self.signals.done.emit(True)
         except Exception as exc:
@@ -134,15 +148,24 @@ class _MssqlToMssqlWorker(QRunnable):
 
 
 class _TestConnectionWorker(QRunnable):
-    def __init__(self, server: str, database: str, port: int) -> None:
+    def __init__(
+        self,
+        server: str,
+        database: str,
+        port: int,
+        username: str = "",
+        password: str = "",
+    ) -> None:
         super().__init__()
         self._server = server
         self._database = database
         self._port = port
+        self._username = username
+        self._password = password
         self.signals = _MigrationSignals()
 
     def run(self) -> None:
-        ok, msg = test_connection(self._server, self._database, self._port)
+        ok, msg = test_connection(self._server, self._database, self._port, self._username, self._password)
         self.signals.log.emit(msg)
         self.signals.done.emit(ok)
 
@@ -239,6 +262,9 @@ class DbMigrationDialog(QDialog):
         self._src_server_input   = _src_field("Server / IP", "e.g. SQLSERVER01")
         self._src_port_input     = _src_field("Port", "1433", "1433")
         self._src_database_input = _src_field("Database name", "e.g. WorkspacesDB")
+        self._src_username_input = _src_field("Username (leave blank for Windows auth)", "DOMAIN\\username or user@domain.com")
+        self._src_password_input = _src_field("Password", "")
+        self._src_password_input.setEchoMode(QLineEdit.Password)
 
         src_test_row = QHBoxLayout()
         self._btn_src_test = QPushButton("🔌  Test Source Connection")
@@ -288,10 +314,13 @@ class DbMigrationDialog(QDialog):
         self._server_input   = _field("Server / IP", "e.g. SQLSERVER01 or 10.1.2.3")
         self._port_input     = _field("Port", "1433", "1433")
         self._database_input = _field("Database name", "e.g. WorkspacesDB")
+        self._username_input = _field("Username (leave blank for Windows auth)", "DOMAIN\\username or user@domain.com")
+        self._password_input = _field("Password", "")
+        self._password_input.setEchoMode(QLineEdit.Password)
 
         layout.addWidget(QLabel(
-            "Authentication: Windows / domain (Trusted_Connection)\n"
-            "No SQL Server account is required."
+            "Leave username blank to use Windows / domain auth (Trusted_Connection).\n"
+            "Enter AD credentials explicitly when running on Linux."
         ))
 
         layout.addStretch()
@@ -436,11 +465,13 @@ class DbMigrationDialog(QDialog):
             self._src_conn_status.setText("Server and database required.")
             self._src_conn_status.setStyleSheet("color: #c00;")
             return
-        port = int(port_str) if port_str else 1433
+        port     = int(port_str) if port_str else 1433
+        username = self._src_username_input.text().strip()
+        password = self._src_password_input.text()
         self._btn_src_test.setEnabled(False)
         self._src_conn_status.setText("Testing…")
         self._src_conn_status.setStyleSheet("color: #888;")
-        worker = _TestConnectionWorker(server, database, port)
+        worker = _TestConnectionWorker(server, database, port, username, password)
         worker.signals.log.connect(lambda m: self._src_conn_status.setText(m))
         worker.signals.done.connect(self._on_src_test_done)
         self._pool.start(worker)
@@ -453,11 +484,13 @@ class DbMigrationDialog(QDialog):
         server   = self._src_server_input.text().strip()
         database = self._src_database_input.text().strip()
         port     = int(self._src_port_input.text().strip() or 1433)
+        username = self._src_username_input.text().strip()
+        password = self._src_password_input.text()
         if not server or not database:
             self._source_status.setText("Enter server and database name first.")
             self._source_status.setStyleSheet("color: #c00; font-size: 11px;")
             return
-        tables = get_mssql_table_info(server, database, port) if _MIGRATOR_AVAILABLE else []
+        tables = get_mssql_table_info(server, database, port, username, password) if _MIGRATOR_AVAILABLE else []
         self._populate_source_table(tables)
 
     # ------------------------------------------------------------------
@@ -487,7 +520,9 @@ class DbMigrationDialog(QDialog):
         self._connection_verified = False
         self._refresh_migrate_button()
 
-        worker = _TestConnectionWorker(server, database, port)
+        username = self._username_input.text().strip()
+        password = self._password_input.text()
+        worker = _TestConnectionWorker(server, database, port, username, password)
         worker.signals.log.connect(self._on_test_message)
         worker.signals.done.connect(self._on_test_done)
         self._pool.start(worker)
@@ -525,17 +560,25 @@ class DbMigrationDialog(QDialog):
         self._log_output.clear()
         self._log("Starting migration…")
 
+        dst_username = self._username_input.text().strip()
+        dst_password = self._password_input.text()
+
         if self._rb_sqlite.isChecked():
             worker = _MigrationWorker(
-                self._source_path.text(), dst_server, dst_database, dst_port
+                self._source_path.text(), dst_server, dst_database, dst_port,
+                dst_username, dst_password,
             )
         else:
             src_server   = self._src_server_input.text().strip()
             src_database = self._src_database_input.text().strip()
             src_port     = int(self._src_port_input.text().strip() or 1433)
+            src_username = self._src_username_input.text().strip()
+            src_password = self._src_password_input.text()
             worker = _MssqlToMssqlWorker(
                 src_server, src_database, src_port,
                 dst_server, dst_database, dst_port,
+                src_username, src_password,
+                dst_username, dst_password,
             )
 
         worker.signals.log.connect(self._log)
