@@ -76,6 +76,50 @@ _COMPANY_PALETTE = [
 
 
 # ---------------------------------------------------------------------------
+# Numeric-aware sort proxy
+# ---------------------------------------------------------------------------
+
+class _SmartSortProxyModel(QSortFilterProxyModel):
+    """QSortFilterProxyModel that sorts numerically when the raw value is numeric.
+
+    Qt.UserRole holds the original Python value (int/float/str/None) as stored
+    by _build_row_items().  We try float() conversion first so that numeric
+    columns (DaysInactive, OwnershipCost "$1,234.56", etc.) sort correctly.
+    Plain text columns fall back to case-insensitive string comparison.
+    None / NaN / "N/A" values always sort to the end regardless of direction.
+    """
+
+    _NULLISH = frozenset({"", "n/a", "none", "null"})
+
+    def lessThan(self, left, right) -> bool:
+        lv = left.data(Qt.UserRole)
+        rv = right.data(Qt.UserRole)
+
+        l_null = self._is_null(lv)
+        r_null = self._is_null(rv)
+        if l_null and r_null:
+            return False
+        if l_null:
+            return False   # nulls always sort last
+        if r_null:
+            return True
+
+        try:
+            return float(str(lv).replace("$", "").replace(",", "")) < \
+                   float(str(rv).replace("$", "").replace(",", ""))
+        except (ValueError, TypeError):
+            return str(lv).lower() < str(rv).lower()
+
+    @classmethod
+    def _is_null(cls, v: Any) -> bool:
+        if v is None:
+            return True
+        if isinstance(v, float) and pd.isna(v):
+            return True
+        return str(v).lower().strip() in cls._NULLISH
+
+
+# ---------------------------------------------------------------------------
 # Background worker
 # ---------------------------------------------------------------------------
 
@@ -295,7 +339,7 @@ class DashboardView(QWidget):
 
         # Proxy model for sort persistence across refreshes
         self._source_model = QStandardItemModel()
-        self._proxy = QSortFilterProxyModel()
+        self._proxy = _SmartSortProxyModel()
         self._proxy.setSourceModel(self._source_model)
         self._tree.setModel(self._proxy)
 

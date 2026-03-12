@@ -589,7 +589,7 @@ class AwsAdWorkspaceService:
                     OriginalCreationDate, LastSeenDate, DirectoryId,
                     IpAddress, BundleId, OperatingSystem, AutoStopTimeout,
                     ConnectionState, LastStateCheck, UserLastActive
-                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?);""",
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?);""",
                 (
                     ws_id,
                     cname, ws.get("UserName"), ws.get("State"), ws.get("DaysInactive", -1),
