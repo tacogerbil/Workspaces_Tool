@@ -321,7 +321,9 @@ class DbMigrationDialog(QDialog):
         layout.addWidget(QLabel(
             "Leave username blank to connect as the current Windows user.\n"
             "Enter DOMAIN\\username + password to connect as a different AD account\n"
-            "(uses Windows Authentication — no Mixed Mode required)."
+            "(Windows Authentication — no Mixed Mode required).\n\n"
+            "Note: the target database must already exist on the server.\n"
+            "Create it in SQL Server Management Studio before testing."
         ))
 
         layout.addStretch()
@@ -629,12 +631,12 @@ class DbMigrationDialog(QDialog):
         username = self._username_input.text().strip()
         password = self._password_input.text()
 
+        # Only server/port/database are persisted — credentials are never written
+        # to disk.  At startup the app re-injects the AD credentials from the
+        # login prompt into every MSSQL config at runtime.
         mssql_cfg: dict[str, str] = {
             "type": "mssql", "server": server, "port": port, "database": database,
         }
-        if username:
-            mssql_cfg["username"] = username
-            mssql_cfg["password"] = password
 
         if self._detected_db_type in ("monitoring", "both"):
             self._config.set_db_backend_config(mssql_cfg)

@@ -70,11 +70,14 @@ class UnifiedMainWindow(QMainWindow):
         self._apply_saved_geometry()
 
         # 2. Database adapters (backend determined by config — SQLite or MSSQL)
+        #    AD credentials are injected into MSSQL configs at runtime so the
+        #    adapter can impersonate the correct account.  They are never written
+        #    to config.ini.
         self.db_adapter = self._build_db_adapter(
-            self.config_adapter.get_db_backend_config()
+            self._inject_ad_creds(self.config_adapter.get_db_backend_config())
         )
         self.sccm_db_adapter = self._build_db_adapter(
-            self.config_adapter.get_sccm_db_backend_config()
+            self._inject_ad_creds(self.config_adapter.get_sccm_db_backend_config())
         )
 
         # 3. Encryption
@@ -103,6 +106,18 @@ class UnifiedMainWindow(QMainWindow):
     # ------------------------------------------------------------------
     # Adapter factories
     # ------------------------------------------------------------------
+
+    def _inject_ad_creds(self, cfg: dict) -> dict:
+        """Returns a copy of cfg with AD credentials added when backend is MSSQL.
+
+        Credentials are runtime-only — they are never stored in config.ini.
+        SQLite configs pass through unchanged.
+        """
+        if cfg.get("type") != "mssql":
+            return cfg
+        if not self._ad_user:
+            return cfg
+        return {**cfg, "username": self._ad_user, "password": self._ad_password}
 
     @staticmethod
     def _build_db_adapter(cfg: dict) -> DbAdapter:
