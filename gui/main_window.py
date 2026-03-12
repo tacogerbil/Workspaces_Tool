@@ -92,7 +92,10 @@ class UnifiedMainWindow(QMainWindow):
             ad_user=self._ad_user,
             ad_password=self._ad_password,
         )
-        self.sccm_service = SccmSyncService(SccmSqlAdapter(), self.sccm_db_adapter)
+        self.sccm_service = SccmSyncService(
+            SccmSqlAdapter(), self.sccm_db_adapter,
+            ad_user=self._ad_user, ad_password=self._ad_password,
+        )
         self.csv_service = CsvIngestionService(self.sccm_db_adapter)
 
         # 5. Schema enforcement — runs AFTER _ensure_tables() so tables exist.

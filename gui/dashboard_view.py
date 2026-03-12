@@ -474,7 +474,7 @@ class DashboardView(QWidget):
             logging.info(f"LIVE QUERY:\n{live_query}")
             live_df = self._db.read_sql(live_query)
             
-            phantom_query = build_phantom_query(active)
+            phantom_query = build_phantom_query(active, dialect=self._db.dialect)
             phantom_df = self._db.read_sql(phantom_query)
 
             frames = [f for f in [live_df, phantom_df] if not f.empty]

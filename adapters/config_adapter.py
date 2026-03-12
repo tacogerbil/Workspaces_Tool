@@ -200,6 +200,10 @@ class ConfigAdapter:
     # ------------------------------------------------------------------
 
     def get_sccm_credentials(self) -> Optional[Dict[str, str]]:
+        """Returns SCCM catalog server/database/schema only.
+
+        Credentials are never stored — the AD login from startup is used.
+        """
         config = self.load_config()
         if "SCCM_Credentials" not in config:
             return None
@@ -210,27 +214,18 @@ class ConfigAdapter:
             "server": sec.get("server", ""),
             "database": sec.get("database", ""),
             "schema": sec.get("schema", "dbo"),
-            "user": sec.get("user", ""),
-            "password": sec.get("password", ""),
         }
 
     def set_sccm_credentials(
         self,
         server: str,
         database: str,
-        user: str,
-        password: str,
         schema: str = "dbo",
     ) -> None:
+        """Persists SCCM catalog server/database/schema. No credentials stored."""
         self._set_section_values(
             "SCCM_Credentials",
-            {
-                "server": server,
-                "database": database,
-                "schema": schema,
-                "user": user,
-                "password": password,
-            },
+            {"server": server, "database": database, "schema": schema},
         )
 
     # ------------------------------------------------------------------

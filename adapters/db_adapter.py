@@ -299,9 +299,18 @@ class MssqlBackend(DbBackend):
             return cur.rowcount
 
     def read_sql(self, query: str, params: Params = ()) -> pd.DataFrame:
+        """Execute a SELECT and return results as a DataFrame.
+
+        Uses cursor.fetchall() rather than pd.read_sql() to avoid the
+        pandas UserWarning about unsupported DBAPI2 connectors.
+        """
         try:
             with self._connect() as conn:
-                return pd.read_sql(query, conn, params=params or None)
+                cur = conn.cursor()
+                cur.execute(query, params) if params else cur.execute(query)
+                columns = [desc[0] for desc in cur.description]
+                rows = cur.fetchall()
+                return pd.DataFrame.from_records(rows, columns=columns)
         except Exception as exc:
             logging.warning(f"MSSQL read error: {exc}")
             return pd.DataFrame()

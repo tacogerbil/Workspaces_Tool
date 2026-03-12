@@ -212,17 +212,12 @@ class SccmMapperView(QWidget):
     def _perform_sccm_sync(self) -> int:
         if not self.sccm_service:
             raise RuntimeError("SCCM sync service is not configured.")
-        if not self.encryptor:
-            raise RuntimeError("Encryptor not initialized — cannot decrypt SCCM credentials.")
         adapter = ConfigAdapter()
         creds = adapter.get_sccm_credentials()
         if not creds:
-            raise ValueError("SCCM credentials not found in config.ini.")
-        decrypted_user = self.encryptor.decrypt_data(creds["user"])
-        decrypted_password = self.encryptor.decrypt_data(creds["password"])
+            raise ValueError("SCCM server not found in config.ini. Set it in Preferences → SCCM Catalog SQL Server.")
         return self.sccm_service.sync_catalog(
             creds["server"], creds["database"], creds["schema"],
-            decrypted_user, decrypted_password,
         )
 
     def _on_sync_success(self, count: int) -> None:

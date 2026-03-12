@@ -32,7 +32,11 @@ def main():
     # in config.ini.  get_db_backend_config() always returns a fallback string,
     # so we check the raw config directly rather than trusting the returned value.
     raw_config = config_adapter.load_config()
-    db_explicitly_set = raw_config.has_option("Database", "path")
+    # SQLite stores "path"; MSSQL stores "server" — either counts as configured
+    db_explicitly_set = (
+        raw_config.has_option("Database", "path")
+        or raw_config.has_option("Database", "server")
+    )
     if not ad_cfg.get("server") or not db_explicitly_set:
         setup_dialog = SettingsDialog(config_adapter, is_setup_mode=True)
         setup_dialog.exec()
@@ -40,7 +44,11 @@ def main():
         # Re-check after setup; abort if still incomplete.
         ad_cfg = config_adapter.get_ad_config()
         raw_config = config_adapter.load_config()
-        if not ad_cfg.get("server") or not raw_config.has_option("Database", "path"):
+        db_configured = (
+            raw_config.has_option("Database", "path")
+            or raw_config.has_option("Database", "server")
+        )
+        if not ad_cfg.get("server") or not db_configured:
             QMessageBox.critical(None, "Aborted", "Configuration setup was incomplete. Exiting application.")
             sys.exit(1)
 

@@ -6,9 +6,17 @@ from adapters.db_adapter import DbAdapter
 class SccmSyncService:
     """Orchestrates syncing the SCCM software catalog into the local database."""
 
-    def __init__(self, sccm_adapter: SccmSqlAdapter, db_adapter: DbAdapter) -> None:
+    def __init__(
+        self,
+        sccm_adapter: SccmSqlAdapter,
+        db_adapter: DbAdapter,
+        ad_user: str = "",
+        ad_password: str = "",
+    ) -> None:
         self.sccm = sccm_adapter
         self.db = db_adapter
+        self._ad_user = ad_user
+        self._ad_password = ad_password
         self._ensure_schema()
 
     def _ensure_schema(self) -> None:
@@ -27,9 +35,7 @@ class SccmSyncService:
             );
         """)
 
-    def sync_catalog(
-        self, server: str, database: str, schema: str, user: str, password: str
-    ) -> int:
+    def sync_catalog(self, server: str, database: str, schema: str) -> int:
         """Fetches the SCCM software catalog and replaces the local cache.
 
         Drops and recreates the sccm_catalog table from the live DataFrame so
@@ -38,7 +44,9 @@ class SccmSyncService:
         Returns the number of rows written, or 0 on empty result.
         """
         logging.info("Starting SCCM catalog sync...")
-        sccm_df = self.sccm.fetch_sccm_data(server, database, schema, user, password)
+        sccm_df = self.sccm.fetch_sccm_data(
+            server, database, schema, self._ad_user, self._ad_password
+        )
 
         if sccm_df is None or sccm_df.empty:
             logging.warning("SCCM query returned no data. Local catalog not updated.")

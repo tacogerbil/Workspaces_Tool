@@ -203,16 +203,13 @@ class PreferencesView(QWidget):
         self._edit_sccm_database.setPlaceholderText("CM_XXX")
         self._edit_sccm_schema = QLineEdit()
         self._edit_sccm_schema.setText("dbo")
-        self._edit_sccm_user = QLineEdit()
-        self._edit_sccm_user.setPlaceholderText("DOMAIN\\username")
-        self._edit_sccm_password = QLineEdit()
-        self._edit_sccm_password.setEchoMode(QLineEdit.Password)
-        self._edit_sccm_password.setPlaceholderText("Password")
         self._sec_sccm_cat.add_row("Server:", self._edit_sccm_server)
         self._sec_sccm_cat.add_row("Database:", self._edit_sccm_database)
         self._sec_sccm_cat.add_row("Schema:", self._edit_sccm_schema)
-        self._sec_sccm_cat.add_row("User (DOMAIN\\user):", self._edit_sccm_user)
-        self._sec_sccm_cat.add_row("Password:", self._edit_sccm_password)
+        self._sec_sccm_cat.add_row(
+            "",
+            QLabel("Authentication uses the AD credentials entered at login.")
+        )
         self._content_layout.addWidget(self._sec_sccm_cat)
 
         scroll.setWidget(content)
@@ -251,8 +248,6 @@ class PreferencesView(QWidget):
         self._edit_sccm_server.setText(sccm.get("server", ""))
         self._edit_sccm_database.setText(sccm.get("database", ""))
         self._edit_sccm_schema.setText(sccm.get("schema", "dbo"))
-        self._edit_sccm_user.setText(sccm.get("user", ""))
-        self._edit_sccm_password.setText(sccm.get("password", ""))
 
     def _save_all(self) -> None:
         try:
@@ -269,8 +264,6 @@ class PreferencesView(QWidget):
             self._config.set_sccm_credentials(
                 server=self._edit_sccm_server.text().strip(),
                 database=self._edit_sccm_database.text().strip(),
-                user=self._edit_sccm_user.text().strip(),
-                password=self._edit_sccm_password.text(),
                 schema=self._edit_sccm_schema.text().strip() or "dbo",
             )
             QMessageBox.information(self, "Preferences Saved", "All preferences have been saved.")

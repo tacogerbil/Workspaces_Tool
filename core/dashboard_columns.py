@@ -345,7 +345,7 @@ def build_live_query(active_columns: list[str]) -> str:
     )
 
 
-def build_phantom_query(active_columns: list[str]) -> str:
+def build_phantom_query(active_columns: list[str], dialect: str = "sqlite") -> str:
     """Build the PHANTOM workspace query using computer_name_history as linker.
 
     Strategy:
@@ -397,9 +397,13 @@ def build_phantom_query(active_columns: list[str]) -> str:
         select_parts.insert(0, "cnh.WorkspaceId AS WorkspaceId")
     select_parts.append("'PHANTOM_AWS' AS RecordType")
 
-    # PreviousNames subquery — uses the recovered WorkspaceId from cnh
+    # PreviousNames subquery — dialect-specific string aggregation
+    if dialect == "mssql":
+        agg_expr = "STRING_AGG(cnh2.ComputerName, ' \u2192 ')"
+    else:
+        agg_expr = "GROUP_CONCAT(cnh2.ComputerName, ' \u2192 ')"
     previous_names_sub = (
-        "(SELECT GROUP_CONCAT(cnh2.ComputerName, ' \u2192 ') "
+        f"(SELECT {agg_expr} "
         "FROM computer_name_history cnh2 "
         "WHERE cnh2.WorkspaceId = cnh.WorkspaceId "
         "AND cnh2.ComputerName != d.ComputerName) AS PreviousNames"
