@@ -600,8 +600,8 @@ def _format_timestamp(value: Any) -> str:
         else:
             return s  # unparseable — return as-is
         if dt.tzinfo:
-            dt = dt.astimezone(timezone.utc)
-        return f"{dt.day} {dt.strftime('%b %Y  %H:%M')} UTC"
+            dt = dt.astimezone()  # convert to local system time
+        return f"{dt.day} {dt.strftime('%b %Y  %H:%M')}"
     except Exception:
         return str(value)
 

@@ -427,18 +427,17 @@ class AwsAdWorkspaceService:
     def _archive_orphans_sqlite(
         self, cursor: Any, aws_data: Dict, ad_devices: Dict
     ) -> None:
-        """Archives workspaces absent from both AWS and AD (SQLite cursor)."""
+        """Moves workspaces no longer present in AWS into historical_archives as DELETED."""
         cursor.execute("SELECT WorkspaceId, ComputerName FROM workspaces")
         db_ws = {row[0]: row[1] for row in cursor.fetchall()}
         aws_ids = set(aws_data.keys())
-        ad_names = set(ad_devices.keys())
 
         for ws_id, cname in db_ws.items():
             if ws_id not in aws_ids:
                 self._archive_single_sqlite(cursor, ws_id)
 
     def _archive_single_sqlite(self, cursor: Any, workspace_id: str) -> None:
-        """Moves one workspace from live tables to historical_archives (SQLite)."""
+        """Moves one workspace from live tables to historical_archives as DELETED."""
         import sqlite3
         conn = cursor.connection
         conn.row_factory = sqlite3.Row
@@ -486,7 +485,7 @@ class AwsAdWorkspaceService:
         cursor.execute(
             "DELETE FROM usage_history WHERE WorkspaceId=?", (workspace_id,)
         )
-        logging.info(f"Archived workspace {workspace_id}.")
+        logging.info(f"Workspace {workspace_id} deleted from AWS — moved to historical_archives.")
 
     def _upsert_workspaces_sqlite(
         self, cursor: Any, aws_data: Dict, ad_devices: Dict, today_str: str

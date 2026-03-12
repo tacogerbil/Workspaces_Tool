@@ -348,7 +348,7 @@ def build_archive_record(
         "FullName": encryptor.decrypt_data(item.get("FullName")),
         "Email": encryptor.decrypt_data(item.get("Email")),
         "Company": encryptor.decrypt_data(item.get("Company")),
-        "FinalStatus": "Archived (Deleted)",
+        "FinalStatus": "DELETED",
         "OriginalCreationDate": item.get("OriginalCreationDate"),
         "Notes": item.get("Notes"),
         "LastAWSStatus": item.get("AWSStatus"),
