@@ -147,6 +147,10 @@ class DashboardView(QWidget):
         # Active columns — loaded from config or default
         self._active_columns: list[str] = self._load_column_prefs()
 
+        # In-place grid patch state
+        self._row_map: dict[str, int] = {}   # WorkspaceId -> source model row index
+        self._grid_columns: list[str] = []   # columns currently built into the model
+
         # Sort state — loaded from config
         self._sort_col_id, self._sort_direction = self._load_sort_prefs()
 
@@ -483,10 +487,6 @@ class DashboardView(QWidget):
                 self._update_kpis(pd.DataFrame())
                 return
 
-            print(f"DEBUG: Concat frames count: {len(frames)}")
-            for f in frames:
-                print(f"  Frame shape: {f.shape}")
-            
             df = pd.concat(frames, ignore_index=True)
 
             # 3. Post-query enrichment (decryption, aliases, computed columns)
@@ -498,9 +498,6 @@ class DashboardView(QWidget):
 
         except Exception as exc:
             logging.error("Dashboard DB refresh failed: %s", exc, exc_info=True)
-            print(f"FATAL ERROR IN DASHBOARD DB REFRESH: {exc}")
-            import traceback
-            traceback.print_exc()
             return
 
         self._update_kpis(df)
@@ -569,14 +566,15 @@ class DashboardView(QWidget):
     # ------------------------------------------------------------------
 
     def _update_grid(self, df: pd.DataFrame, active: list[str]) -> None:
-        """Rebuild the grid model and reapply the saved sort."""
-        # Preserve scroll position and selected row across refreshes
-        vscroll = self._tree.verticalScrollBar().value()
-        selected_key = self._get_selected_row_key(active)
+        """Route to full rebuild (column change) or in-place patch (data change)."""
+        if active != self._grid_columns:
+            self._rebuild_grid(df, active)
+        else:
+            self._patch_grid(df, active)
 
+    def _rebuild_grid(self, df: pd.DataFrame, active: list[str]) -> None:
+        """Full clear+rebuild — only runs on first load or column config change."""
         self._source_model.clear()
-
-        # Set headers from ColumnDef.display_name
         headers = [
             COLUMN_REGISTRY[col_id].display_name
             for col_id in active
@@ -584,65 +582,99 @@ class DashboardView(QWidget):
         ]
         self._source_model.setHorizontalHeaderLabels(headers)
 
-        print(f"DEBUG _update_grid: appending {len(df)} rows to QStandardItemModel")
+        self._row_map = {}
         for _, row in df.iterrows():
             items = self._build_row_items(row, active)
             self._apply_row_color(items, row)
+            ws_id = row.get("WorkspaceId")
+            if ws_id is not None and not pd.isna(ws_id):
+                self._row_map[str(ws_id)] = self._source_model.rowCount()
             self._source_model.appendRow(items)
 
+        self._grid_columns = list(active)
         self._tree.resizeColumnToContents(0)
         self._restore_sort()
 
-        # Restore selection by row identity; fall back to scroll position
-        if selected_key and not self._restore_selected_row(selected_key, active):
-            self._tree.verticalScrollBar().setValue(vscroll)
+    def _patch_grid(self, df: pd.DataFrame, active: list[str]) -> None:
+        """In-place diff update — only touch cells whose value changed.
 
-    def _get_selected_row_key(self, active: list[str]) -> str | None:
-        """Return the UserName (or WorkspaceId) of the currently selected proxy row."""
-        sel = self._tree.selectionModel().selectedRows()
-        if not sel:
-            return None
-        proxy_idx = sel[0]
-        for key_col in ("UserName", "WorkspaceId"):
-            if key_col in active:
-                col = active.index(key_col)
-                value = proxy_idx.siblingAtColumn(col).data(Qt.DisplayRole)
-                if value:
-                    return f"{key_col}:{value}"
-        return None
+        Scroll position, sort order, and selection survive untouched because
+        the model is never cleared.  New workspaces are appended; deleted ones
+        are removed (indices rebuilt via the UserRole+1 identity key on item[0]).
+        """
+        # Index incoming data by WorkspaceId
+        new_data: dict[str, pd.Series] = {}
+        for _, row in df.iterrows():
+            ws_id = row.get("WorkspaceId")
+            if ws_id is not None and not pd.isna(ws_id):
+                new_data[str(ws_id)] = row
 
-    def _restore_selected_row(self, key: str, active: list[str]) -> bool:
-        """Find the row matching *key* in the proxy, select it, and scroll to it."""
-        try:
-            col_name, value = key.split(":", 1)
-        except ValueError:
-            return False
-        if col_name not in active:
-            return False
-        col = active.index(col_name)
-        for proxy_row in range(self._proxy.rowCount()):
-            idx = self._proxy.index(proxy_row, col)
-            if idx.data(Qt.DisplayRole) == value:
-                self._tree.selectionModel().setCurrentIndex(
-                    self._proxy.index(proxy_row, 0),
-                    self._tree.selectionModel().ClearAndSelect | self._tree.selectionModel().Rows,
-                )
-                self._tree.scrollTo(self._proxy.index(proxy_row, 0), QAbstractItemView.PositionAtCenter)
-                return True
-        return False
+        existing_ids = set(self._row_map)
+        new_ids = set(new_data)
+
+        # 1. Update changed cells in existing rows
+        for ws_id in existing_ids & new_ids:
+            src_row = self._row_map[ws_id]
+            row = new_data[ws_id]
+            new_items = self._build_row_items(row, active)
+            self._apply_row_color(new_items, row)
+            for col, new_item in enumerate(new_items):
+                cell = self._source_model.item(src_row, col)
+                if cell is None:
+                    continue
+                if cell.text() != new_item.text():
+                    cell.setText(new_item.text())
+                    cell.setData(new_item.data(Qt.UserRole), Qt.UserRole)
+                # Always sync colours — AWS status may have changed
+                cell.setBackground(new_item.background())
+                cell.setForeground(new_item.foreground())
+                cell.setFont(new_item.font())
+
+        # 2. Append genuinely new workspaces
+        for ws_id in new_ids - existing_ids:
+            row = new_data[ws_id]
+            items = self._build_row_items(row, active)
+            self._apply_row_color(items, row)
+            self._row_map[ws_id] = self._source_model.rowCount()
+            self._source_model.appendRow(items)
+
+        # 3. Remove deleted workspaces (reverse order to keep indices stable)
+        removed = sorted(
+            existing_ids - new_ids,
+            key=lambda k: self._row_map[k],
+            reverse=True,
+        )
+        for ws_id in removed:
+            self._source_model.removeRow(self._row_map[ws_id])
+
+        # 4. Rebuild row map after any removals (indices shift on removeRow)
+        if removed:
+            self._row_map = {}
+            for row_idx in range(self._source_model.rowCount()):
+                item = self._source_model.item(row_idx, 0)
+                if item:
+                    stored_id = item.data(Qt.UserRole + 1)
+                    if stored_id:
+                        self._row_map[stored_id] = row_idx
 
     def _build_row_items(
         self, row: pd.Series, active: list[str]
     ) -> list[QStandardItem]:
         items: list[QStandardItem] = []
-        for col_id in active:
+        for i, col_id in enumerate(active):
             defn = COLUMN_REGISTRY.get(col_id)
             if not defn:
                 continue
             raw = row.get(defn.sql_alias, "")
             text = "" if pd.isna(raw) else str(raw)
             item = QStandardItem(text)
-            item.setData(raw, Qt.UserRole)  # preserve raw value for numeric sort
+            item.setData(raw, Qt.UserRole)
+            if i == 0:
+                # Pin WorkspaceId on item[0] so we can rebuild the row map
+                # after removals, regardless of which columns are visible.
+                ws_id = row.get("WorkspaceId")
+                if ws_id is not None and not pd.isna(ws_id):
+                    item.setData(str(ws_id), Qt.UserRole + 1)
             items.append(item)
         return items
 

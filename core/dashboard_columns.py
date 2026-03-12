@@ -322,6 +322,8 @@ def build_live_query(active_columns: list[str]) -> str:
     """Build the LIVE workspace SELECT query from active_columns.
 
     Only includes JOINs required by the active column set — no dead joins.
+    WorkspaceId is always included as a hidden identity key for in-place grid
+    patching, even when not in active_columns.
 
     Args:
         active_columns: Column IDs to include (ordered).
@@ -330,6 +332,8 @@ def build_live_query(active_columns: list[str]) -> str:
         A complete SQL SELECT statement ready for DbAdapter.read_sql().
     """
     select_parts = _selected_expressions(active_columns)
+    if "WorkspaceId" not in active_columns:
+        select_parts.insert(0, "w.WorkspaceId AS WorkspaceId")
     select_parts.append("'LIVE' AS RecordType")
     joins = _build_join_clauses(active_columns)
 
@@ -389,6 +393,8 @@ def build_phantom_query(active_columns: list[str]) -> str:
             # No equivalent on the device/history side — emit NULL
             select_parts.append(f"NULL AS {alias}")
 
+    if "WorkspaceId" not in active_columns:
+        select_parts.insert(0, "cnh.WorkspaceId AS WorkspaceId")
     select_parts.append("'PHANTOM_AWS' AS RecordType")
 
     # PreviousNames subquery — uses the recovered WorkspaceId from cnh
@@ -424,6 +430,8 @@ def build_archived_query(active_columns: list[str]) -> str:
         A complete SQL SELECT statement for ARCHIVED rows.
     """
     select_parts = _selected_expressions(active_columns, use_archived=True)
+    if "WorkspaceId" not in active_columns:
+        select_parts.insert(0, "ha.WorkspaceId AS WorkspaceId")
     select_parts.append("'ARCHIVED' AS RecordType")
 
     _sep = ",\n    "
