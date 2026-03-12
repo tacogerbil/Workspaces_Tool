@@ -21,34 +21,46 @@ class CsvIngestionService:
         self._ensure_schema()
 
     def _ensure_schema(self) -> None:
-        """Creates or migrates the software_inventory table to the current schema.
+        """Creates or migrates the software_inventory table (dialect-aware)."""
+        if not self.db.table_exists("software_inventory"):
+            if self.db.dialect == "sqlite":
+                self.db.execute_script("""
+                    CREATE TABLE IF NOT EXISTS software_inventory (
+                        id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+                        computer_name        TEXT,
+                        user_name            TEXT,
+                        raw_display_name     TEXT,
+                        raw_display_version  TEXT,
+                        publisher            TEXT,
+                        normalized_name      TEXT,
+                        normalized_version   TEXT,
+                        sccm_package_id      TEXT,
+                        group_id             TEXT,
+                        needs_review         INTEGER DEFAULT 1,
+                        install_scope        TEXT,
+                        install_date         TEXT
+                    );
+                """)
+            else:
+                self.db.execute_query("""
+                    CREATE TABLE [software_inventory] (
+                        [id]                   INT IDENTITY(1,1) PRIMARY KEY,
+                        [computer_name]        NVARCHAR(255),
+                        [user_name]            NVARCHAR(255),
+                        [raw_display_name]     NVARCHAR(MAX),
+                        [raw_display_version]  NVARCHAR(255),
+                        [publisher]            NVARCHAR(255),
+                        [normalized_name]      NVARCHAR(MAX),
+                        [normalized_version]   NVARCHAR(255),
+                        [sccm_package_id]      NVARCHAR(255),
+                        [group_id]             NVARCHAR(64),
+                        [needs_review]         INT DEFAULT 1,
+                        [install_scope]        NVARCHAR(64),
+                        [install_date]         NVARCHAR(32)
+                    )
+                """)
 
-        Handles existing databases that were created with an older column layout by
-        adding any missing columns before attempting index creation.
-        """
-        # Create the table with the full schema if it does not yet exist.
-        # If the table already exists (older schema), this is a no-op.
-        self.db.execute_script("""
-            CREATE TABLE IF NOT EXISTS software_inventory (
-                id                   INTEGER PRIMARY KEY AUTOINCREMENT,
-                computer_name        TEXT,
-                user_name            TEXT,
-                raw_display_name     TEXT,
-                raw_display_version  TEXT,
-                publisher            TEXT,
-                normalized_name      TEXT,
-                normalized_version   TEXT,
-                sccm_package_id      TEXT,
-                group_id             TEXT,
-                needs_review         INTEGER DEFAULT 1,
-                install_scope        TEXT,
-                install_date         TEXT
-            );
-        """)
-
-        # Migrate older schema versions by adding columns that may not yet exist.
-        # Covers DBs created by the original gui_database_setup.py which used
-        # DisplayName/DisplayVersion and lacked the normalized/review columns.
+        # Add any missing columns for older schema versions (both dialects)
         for column, col_type in [
             ("computer_name", "TEXT"),
             ("user_name", "TEXT"),
@@ -59,21 +71,18 @@ class CsvIngestionService:
             ("normalized_version", "TEXT"),
             ("sccm_package_id", "TEXT"),
             ("group_id", "TEXT"),
-            ("needs_review", "INTEGER DEFAULT 1"),
+            ("needs_review", "INTEGER"),
             ("install_scope", "TEXT"),
             ("install_date", "TEXT"),
         ]:
-            try:
-                self.db.execute_query(
-                    f"ALTER TABLE software_inventory ADD COLUMN {column} {col_type}"
-                )
-            except Exception:
-                pass  # Column already exists in this database.
+            self.db.add_column_if_not_exists("software_inventory", column, col_type)
 
-        self.db.execute_script("""
-            CREATE INDEX IF NOT EXISTS idx_normalized_name
-                ON software_inventory (normalized_name);
-        """)
+        # Index (SQLite only — MSSQL index was set on the migrated table already)
+        if self.db.dialect == "sqlite":
+            self.db.execute_script("""
+                CREATE INDEX IF NOT EXISTS idx_normalized_name
+                    ON software_inventory (normalized_name);
+            """)
 
     def process_csvs_from_folder(self, folder_path: str) -> pd.DataFrame:
         """Reads all CSVs in a folder and returns a unified DataFrame."""
@@ -175,19 +184,19 @@ class CsvIngestionService:
             'computer_name', 'user_name', 'raw_display_name', 'raw_display_version',
             'publisher', 'normalized_name', 'normalized_version', 'sccm_package_id', 'group_id', 'needs_review'
         ]
-        records_to_insert = final_df[db_columns].to_dict('records')
+        col_list = ", ".join(db_columns)
+        placeholders = ", ".join("?" for _ in db_columns)
+        query = (
+            f"INSERT INTO software_inventory ({col_list}) "
+            f"VALUES ({placeholders})"
+        )
+        rows = [
+            tuple(row[c] for c in db_columns)
+            for row in final_df[db_columns].to_dict('records')
+        ]
 
-        logging.info(f"Inserting {len(records_to_insert)} records into the database.")
-        self.db.execute_query("DELETE FROM software_inventory;")
-        query = '''
-            INSERT INTO software_inventory (
-                computer_name, user_name, raw_display_name, raw_display_version,
-                publisher, normalized_name, normalized_version, sccm_package_id, group_id, needs_review
-            ) VALUES (
-                :computer_name, :user_name, :raw_display_name, :raw_display_version,
-                :publisher, :normalized_name, :normalized_version, :sccm_package_id, :group_id, :needs_review
-            )
-        '''
-        self.db.execute_many(query, records_to_insert)
+        logging.info(f"Inserting {len(rows)} records into the database.")
+        self.db.execute_query("DELETE FROM software_inventory")
+        self.db.execute_many(query, rows)
         logging.info("Data insertion complete.")
         return len(records_to_insert)

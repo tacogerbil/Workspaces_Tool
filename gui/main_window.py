@@ -156,19 +156,20 @@ class UnifiedMainWindow(QMainWindow):
     # ------------------------------------------------------------------
 
     def _build_encryptor(self) -> DataEncryptor | None:
-        """Derives the Fernet key from the <db_path>.salt file + master password.
+        """Derives the Fernet key from a .salt file + master password.
 
-        The salt lives in a binary file named <db_path>.salt next to the database,
-        identical to how the original app created it.  If the file is missing a new
-        one is generated in the same location.  The salt is never stored in config.ini.
+        SQLite: salt file lives next to the .db file (<db_path>.salt).
+        MSSQL:  salt file lives in the app config directory (mssql.salt).
+        The salt is never stored in config.ini.
         """
         try:
             from pathlib import Path
             db_path = self.config_adapter.get_monitor_db_path()
-            if not db_path:
-                logging.error("Cannot build encryptor: no DB path configured.")
-                return None
-            salt_file = Path(db_path + ".salt")
+            if db_path:
+                salt_file = Path(db_path + ".salt")
+            else:
+                # MSSQL — no local db file; store salt next to config.ini
+                salt_file = self.config_adapter.config_path.parent / "mssql.salt"
             if salt_file.exists():
                 salt = salt_file.read_bytes()
                 logging.info(f"Salt loaded from {salt_file}.")

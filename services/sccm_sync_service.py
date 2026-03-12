@@ -20,20 +20,29 @@ class SccmSyncService:
         self._ensure_schema()
 
     def _ensure_schema(self) -> None:
-        """Creates the sccm_catalog table if it does not already exist.
-
-        Schema mirrors the columns returned by SccmSqlAdapter.fetch_sccm_data:
-        SccmId, Name, Version, Publisher, Type.
-        """
-        self.db.execute_script("""
-            CREATE TABLE IF NOT EXISTS sccm_catalog (
-                SccmId    TEXT PRIMARY KEY,
-                Name      TEXT,
-                Version   TEXT,
-                Publisher TEXT,
-                Type      TEXT
-            );
-        """)
+        """Creates the sccm_catalog table if it does not already exist (dialect-aware)."""
+        if self.db.table_exists("sccm_catalog"):
+            return
+        if self.db.dialect == "sqlite":
+            self.db.execute_script("""
+                CREATE TABLE IF NOT EXISTS sccm_catalog (
+                    SccmId    TEXT PRIMARY KEY,
+                    Name      TEXT,
+                    Version   TEXT,
+                    Publisher TEXT,
+                    Type      TEXT
+                );
+            """)
+        else:
+            self.db.execute_query("""
+                CREATE TABLE [sccm_catalog] (
+                    [SccmId]     NVARCHAR(255) PRIMARY KEY,
+                    [Name]       NVARCHAR(MAX),
+                    [Version]    NVARCHAR(255),
+                    [Publisher]  NVARCHAR(255),
+                    [Type]       NVARCHAR(64)
+                )
+            """)
 
     def sync_catalog(self, server: str, database: str, schema: str) -> int:
         """Fetches the SCCM software catalog and replaces the local cache.
