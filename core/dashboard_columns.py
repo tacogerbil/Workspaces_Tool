@@ -159,6 +159,43 @@ COLUMN_REGISTRY: dict[str, ColumnDef] = {
         sql_alias="DirectoryId",
         archived_sql_expr="ha.DirectoryId",
     ),
+    "IpAddress": ColumnDef(
+        display_name="IPv4 Address",
+        sql_expr="w.IpAddress",
+        sql_alias="IpAddress",
+    ),
+    "BundleId": ColumnDef(
+        display_name="Bundle ID",
+        sql_expr="w.BundleId",
+        sql_alias="BundleId",
+    ),
+    "OperatingSystem": ColumnDef(
+        display_name="Operating System",
+        sql_expr="w.OperatingSystem",
+        sql_alias="OperatingSystem",
+    ),
+    "AutoStopTimeout": ColumnDef(
+        display_name="Auto-Stop Timeout",
+        sql_expr="w.AutoStopTimeout",
+        sql_alias="AutoStopTimeout",
+        numeric_sort=True,
+    ),
+    "ConnectionState": ColumnDef(
+        display_name="Connection State",
+        sql_expr="w.ConnectionState",
+        sql_alias="ConnectionState",
+    ),
+    "LastStateCheck": ColumnDef(
+        display_name="Last State Check",
+        sql_expr="w.LastStateCheck",
+        sql_alias="LastStateCheck",
+    ),
+    "UserLastActive": ColumnDef(
+        display_name="User Last Active",
+        sql_expr="w.UserLastActive",
+        sql_alias="UserLastActive",
+    ),
+
     # ── AD device columns ───────────────────────────────────────────────────
 
     "DeviceADStatus": ColumnDef(

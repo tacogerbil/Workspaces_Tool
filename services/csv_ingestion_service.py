@@ -184,14 +184,25 @@ class CsvIngestionService:
             'computer_name', 'user_name', 'raw_display_name', 'raw_display_version',
             'publisher', 'normalized_name', 'normalized_version', 'sccm_package_id', 'group_id', 'needs_review'
         ]
+        # Ensure needs_review is a clean integer (pandas merge upcasts to float64)
+        final_df['needs_review'] = final_df['needs_review'].fillna(1).astype(int)
         col_list = ", ".join(db_columns)
         placeholders = ", ".join("?" for _ in db_columns)
         query = (
             f"INSERT INTO software_inventory ({col_list}) "
             f"VALUES ({placeholders})"
         )
+
+        import math
+
+        def _sanitize(v: object) -> object:
+            """Convert NaN/float-NaN to None so MSSQL nullable columns accept them."""
+            if isinstance(v, float) and math.isnan(v):
+                return None
+            return v
+
         rows = [
-            tuple(row[c] for c in db_columns)
+            tuple(_sanitize(row[c]) for c in db_columns)
             for row in final_df[db_columns].to_dict('records')
         ]
 

@@ -49,7 +49,14 @@ CREATE TABLE IF NOT EXISTS workspaces (
     UserVolumeSize INTEGER,
     OriginalCreationDate TEXT,
     LastSeenDate TEXT,
-    DirectoryId TEXT
+    DirectoryId TEXT,
+    IpAddress TEXT,
+    BundleId TEXT,
+    OperatingSystem TEXT,
+    AutoStopTimeout INTEGER,
+    ConnectionState TEXT,
+    LastStateCheck TEXT,
+    UserLastActive TEXT
 );
 CREATE TABLE IF NOT EXISTS ad_devices (
     ComputerName TEXT PRIMARY KEY,
@@ -88,6 +95,13 @@ CREATE TABLE IF NOT EXISTS usage_history (
     BillingMonth TEXT NOT NULL,
     UsedHours REAL NOT NULL,
     UNIQUE(WorkspaceId, BillingMonth)
+);
+CREATE TABLE IF NOT EXISTS connection_history (
+    HistoryId      INTEGER PRIMARY KEY AUTOINCREMENT,
+    WorkspaceId    TEXT NOT NULL,
+    UserLastActive TEXT NOT NULL,
+    LoggedAt       TEXT NOT NULL,
+    UNIQUE(WorkspaceId, UserLastActive)
 );
 CREATE TABLE IF NOT EXISTS historical_archives (
     ArchivedDate TEXT,
@@ -137,7 +151,14 @@ _MSSQL_TABLE_DEFS: List[Tuple[str, str]] = [
         [UserVolumeSize] INT,
         [OriginalCreationDate] NVARCHAR(32),
         [LastSeenDate] NVARCHAR(32),
-        [DirectoryId] NVARCHAR(64)
+        [DirectoryId] NVARCHAR(64),
+        [IpAddress]       NVARCHAR(64),
+        [BundleId]        NVARCHAR(64),
+        [OperatingSystem] NVARCHAR(128),
+        [AutoStopTimeout] INT,
+        [ConnectionState] NVARCHAR(32),
+        [LastStateCheck]  NVARCHAR(64),
+        [UserLastActive]  NVARCHAR(64)
     )"""),
     ("ad_devices", """CREATE TABLE [ad_devices] (
         [ComputerName] NVARCHAR(255) PRIMARY KEY,
@@ -177,6 +198,13 @@ _MSSQL_TABLE_DEFS: List[Tuple[str, str]] = [
         [UsedHours] FLOAT NOT NULL,
         CONSTRAINT uq_ws_month UNIQUE([WorkspaceId],[BillingMonth])
     )"""),
+    ("connection_history", """CREATE TABLE [connection_history] (
+    [HistoryId]      INT IDENTITY(1,1) PRIMARY KEY,
+    [WorkspaceId]    NVARCHAR(64) NOT NULL,
+    [UserLastActive] NVARCHAR(64) NOT NULL,
+    [LoggedAt]       NVARCHAR(64) NOT NULL,
+    CONSTRAINT uq_ws_lastactive UNIQUE([WorkspaceId],[UserLastActive])
+)"""),
     ("historical_archives", """CREATE TABLE [historical_archives] (
         [ArchivedDate] NVARCHAR(64),
         [WorkspaceId] NVARCHAR(64),
@@ -392,6 +420,8 @@ class AwsAdWorkspaceService:
                 )
             if ad_users:
                 self._upsert_ad_users_sqlite(c, ad_users)
+            if aws_data:
+                self._log_connection_history_sqlite(c, aws_data, today_str)
             conn.commit()
 
     def _archive_orphans_sqlite(
@@ -404,7 +434,7 @@ class AwsAdWorkspaceService:
         ad_names = set(ad_devices.keys())
 
         for ws_id, cname in db_ws.items():
-            if ws_id not in aws_ids and cname not in ad_names:
+            if ws_id not in aws_ids:
                 self._archive_single_sqlite(cursor, ws_id)
 
     def _archive_single_sqlite(self, cursor: Any, workspace_id: str) -> None:
@@ -478,14 +508,21 @@ class AwsAdWorkspaceService:
                 """REPLACE INTO workspaces (
                     WorkspaceId, ComputerName, UserName, AWSStatus, DaysInactive,
                     RunningMode, ComputeType, RootVolumeSize, UserVolumeSize,
-                    OriginalCreationDate, LastSeenDate, DirectoryId
-                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    OriginalCreationDate, LastSeenDate, DirectoryId,
+                    IpAddress, BundleId, OperatingSystem, AutoStopTimeout,
+                    ConnectionState, LastStateCheck, UserLastActive
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     ws_id, cname, ws.get("UserName"), ws.get("State"),
                     ws.get("DaysInactive", -1), props.get("RunningMode"),
                     props.get("ComputeTypeName"), props.get("RootVolumeSizeGib"),
                     props.get("UserVolumeSizeGib"), original_date, today_str,
                     ws.get("DirectoryId"),
+                    ws.get("IpAddress"), ws.get("BundleId"),
+                    props.get("OperatingSystemName"),
+                    props.get("RunningModeAutoStopTimeoutInMinutes"),
+                    ws.get("ConnectionState"), ws.get("LastStateCheck"),
+                    ws.get("UserLastActive"),
                 ),
             )
             if cname:
@@ -494,6 +531,19 @@ class AwsAdWorkspaceService:
                     "(WorkspaceId, ComputerName, FirstSeenDate) VALUES (?,?,?)",
                     (ws_id, cname, today_str),
                 )
+
+    def _log_connection_history_sqlite(
+        self, cursor: Any, aws_data: Dict, today_str: str
+    ) -> None:
+        for ws_id, ws in aws_data.items():
+            new_active = ws.get("UserLastActive")
+            if not new_active:
+                continue
+            cursor.execute(
+                "INSERT OR IGNORE INTO connection_history "
+                "(WorkspaceId, UserLastActive, LoggedAt) VALUES (?,?,?)",
+                (ws_id, new_active, today_str),
+            )
 
     def _upsert_ad_users_sqlite(self, cursor: Any, ad_users: Dict) -> None:
         for uname, udata in ad_users.items():
@@ -530,22 +580,34 @@ class AwsAdWorkspaceService:
                 WHEN MATCHED THEN UPDATE SET
                     ComputerName=?, UserName=?, AWSStatus=?, DaysInactive=?,
                     RunningMode=?, ComputeType=?, RootVolumeSize=?, UserVolumeSize=?,
-                    LastSeenDate=?, DirectoryId=?
+                    LastSeenDate=?, DirectoryId=?,
+                    IpAddress=?, BundleId=?, OperatingSystem=?, AutoStopTimeout=?,
+                    ConnectionState=?, LastStateCheck=?, UserLastActive=?
                 WHEN NOT MATCHED THEN INSERT (
                     WorkspaceId, ComputerName, UserName, AWSStatus, DaysInactive,
                     RunningMode, ComputeType, RootVolumeSize, UserVolumeSize,
-                    OriginalCreationDate, LastSeenDate, DirectoryId
-                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?);""",
+                    OriginalCreationDate, LastSeenDate, DirectoryId,
+                    IpAddress, BundleId, OperatingSystem, AutoStopTimeout,
+                    ConnectionState, LastStateCheck, UserLastActive
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?);""",
                 (
                     ws_id,
                     cname, ws.get("UserName"), ws.get("State"), ws.get("DaysInactive", -1),
                     props.get("RunningMode"), props.get("ComputeTypeName"),
                     props.get("RootVolumeSizeGib"), props.get("UserVolumeSizeGib"),
                     today_str, ws.get("DirectoryId"),
+                    ws.get("IpAddress"), ws.get("BundleId"),
+                    props.get("OperatingSystemName"),
+                    props.get("RunningModeAutoStopTimeoutInMinutes"),
+                    ws.get("ConnectionState"), ws.get("LastStateCheck"), ws.get("UserLastActive"),
                     ws_id, cname, ws.get("UserName"), ws.get("State"), ws.get("DaysInactive", -1),
                     props.get("RunningMode"), props.get("ComputeTypeName"),
                     props.get("RootVolumeSizeGib"), props.get("UserVolumeSizeGib"),
                     original_date, today_str, ws.get("DirectoryId"),
+                    ws.get("IpAddress"), ws.get("BundleId"),
+                    props.get("OperatingSystemName"),
+                    props.get("RunningModeAutoStopTimeoutInMinutes"),
+                    ws.get("ConnectionState"), ws.get("LastStateCheck"), ws.get("UserLastActive"),
                 ),
             )
 
@@ -590,6 +652,24 @@ class AwsAdWorkspaceService:
                         (row["WorkspaceId"], cname_hist, row["WorkspaceId"], cname_hist, today_str),
                     )
 
+        if aws_data:
+            self._log_connection_history_generic(aws_data, today_str)
+
+    def _log_connection_history_generic(self, aws_data: Dict, today_str: str) -> None:
+        """Logs new UserLastActive timestamps for changed connection activity (MSSQL path)."""
+        for ws_id, ws in aws_data.items():
+            new_active = ws.get("UserLastActive")
+            if not new_active:
+                continue
+            self._db.execute_query(
+                """MERGE INTO connection_history AS t
+                USING (SELECT ? AS WorkspaceId, ? AS UserLastActive) AS s
+                    ON t.WorkspaceId = s.WorkspaceId AND t.UserLastActive = s.UserLastActive
+                WHEN NOT MATCHED THEN INSERT (WorkspaceId, UserLastActive, LoggedAt)
+                    VALUES (?,?,?);""",
+                (ws_id, new_active, ws_id, new_active, today_str),
+            )
+
     def _archive_orphans_generic(self, aws_data: Dict, ad_devices: Dict) -> None:
         """Archives workspaces absent from both AWS fetch and AD (MSSQL path)."""
         db_ws_df = self._db.read_sql("SELECT WorkspaceId, ComputerName FROM workspaces")
@@ -600,8 +680,7 @@ class AwsAdWorkspaceService:
 
         for row in db_ws_df.to_dict("records"):
             ws_id = row["WorkspaceId"]
-            cname = row["ComputerName"]
-            if ws_id not in aws_ids and cname not in ad_names:
+            if ws_id not in aws_ids:
                 self._archive_single_generic(ws_id)
 
     def _archive_single_generic(self, workspace_id: str) -> None:

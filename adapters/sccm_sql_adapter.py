@@ -24,7 +24,7 @@ class SccmSqlAdapter:
             token = win32security.LogonUser(
                 username, domain, password,
                 win32con.LOGON32_LOGON_NEW_CREDENTIALS,
-                win32con.LOGON32_PROVIDER_DEFAULT
+                3  # LOGON32_PROVIDER_WINNT50 — required for domain accounts
             )
             win32security.ImpersonateLoggedOnUser(token)
             logging.info("Impersonation successful.")
@@ -51,7 +51,10 @@ class SccmSqlAdapter:
         if '\\' in user:
             domain, username = user.split('\\', 1)
         else:
-            domain, username = ".", user
+            # Derive domain from FQDN (e.g. "SCCM01.corp.local" → "CORP")
+            parts = server.split('.')
+            domain = parts[1].upper() if len(parts) >= 3 else parts[0].upper()
+            username = user
 
         with self.impersonate(domain, username, password):
             conn_str = (
@@ -91,11 +94,15 @@ class SccmSqlAdapter:
             ORDER BY Name;
             """
 
-                df = pd.read_sql(sql_query, conn)
+                cursor = conn.cursor()
+                cursor.execute(sql_query)
+                columns = [col[0] for col in cursor.description]
+                rows = cursor.fetchall()
+                df = pd.DataFrame.from_records(rows, columns=columns)
                 logging.info(f"--- QUERY COMPLETE: Found {len(df)} total Applications and Packages ---")
 
                 for col in df.columns:
                     if df[col].dtype == 'object':
                         df[col] = df[col].str.strip()
-                
+
                 return df

@@ -69,6 +69,13 @@ WORKSPACES_COLUMNS: list[ColSpec] = [
     ColSpec("OriginalCreationDate", "TEXT"),        # "YYYY-MM-DD"
     ColSpec("LastSeenDate",         "TEXT"),        # "YYYY-MM-DD", updated each sync
     ColSpec("DirectoryId",          "TEXT"),
+    ColSpec("IpAddress",            "TEXT"),        # from boto3 ws["IpAddress"]
+    ColSpec("BundleId",             "TEXT"),        # from boto3 ws["BundleId"]
+    ColSpec("OperatingSystem",      "TEXT"),        # from WorkspaceProperties.OperatingSystemName
+    ColSpec("AutoStopTimeout",      "INTEGER"),     # from WorkspaceProperties.RunningModeAutoStopTimeoutInMinutes
+    ColSpec("ConnectionState",      "TEXT"),        # from describe_workspaces_connection_status
+    ColSpec("LastStateCheck",       "TEXT"),        # ISO timestamp of ConnectionStateCheckTimestamp
+    ColSpec("UserLastActive",       "TEXT"),        # ISO timestamp of LastKnownUserConnectionTimestamp
 ]
 
 AD_DEVICES_COLUMNS: list[ColSpec] = [
@@ -119,6 +126,15 @@ USAGE_HISTORY_COLUMNS: list[ColSpec] = [
     ColSpec("UsedHours",    "REAL"),     # NOT NULL
 ]
 
+CONNECTION_HISTORY_COLUMNS: list[ColSpec] = [
+    # Verbatim from CREATE TABLE connection_history
+    # UNIQUE(WorkspaceId, UserLastActive) — only new timestamps are logged
+    ColSpec("HistoryId",      "INTEGER"),  # PK AUTOINCREMENT
+    ColSpec("WorkspaceId",    "TEXT"),     # NOT NULL
+    ColSpec("UserLastActive", "TEXT"),     # NOT NULL — ISO timestamp
+    ColSpec("LoggedAt",       "TEXT"),     # NOT NULL — "YYYY-MM-DD" sync date
+]
+
 HISTORICAL_ARCHIVES_COLUMNS: list[ColSpec] = [
     # Verbatim from CREATE TABLE historical_archives
     # Composite PK: (WorkspaceId, ArchivedDate)
@@ -167,6 +183,7 @@ MONITORING_TABLE_SCHEMAS: dict[str, list[ColSpec]] = {
     "workspace_templates":   WORKSPACE_TEMPLATES_COLUMNS,
     "computer_name_history": COMPUTER_NAME_HISTORY_COLUMNS,
     "usage_history":         USAGE_HISTORY_COLUMNS,
+    "connection_history":    CONNECTION_HISTORY_COLUMNS,
     "historical_archives":   HISTORICAL_ARCHIVES_COLUMNS,
     "audit_log":             AUDIT_LOG_COLUMNS,
     "processed_csvs":        PROCESSED_CSVS_COLUMNS,

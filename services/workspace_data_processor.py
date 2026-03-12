@@ -195,12 +195,16 @@ def fetch_aws_data(region: str, profile: Optional[str]) -> Dict[str, Dict]:
                     connection_statuses[status["WorkspaceId"]] = status
 
     for ws in workspaces:
-        status = connection_statuses.get(ws["WorkspaceId"])
-        if status and status.get("LastKnownUserConnectionTimestamp"):
-            last_ts = status["LastKnownUserConnectionTimestamp"]
-            ws["DaysInactive"] = (datetime.now(timezone.utc) - last_ts).days
-        else:
-            ws["DaysInactive"] = -1
+        status = connection_statuses.get(ws["WorkspaceId"]) or {}
+
+        last_ts = status.get("LastKnownUserConnectionTimestamp")
+        ws["DaysInactive"] = (datetime.now(timezone.utc) - last_ts).days if last_ts else -1
+
+        # Connection status fields
+        ws["ConnectionState"] = status.get("ConnectionState", "UNKNOWN")
+        last_check = status.get("ConnectionStateCheckTimestamp")
+        ws["LastStateCheck"] = last_check.isoformat() if last_check else None
+        ws["UserLastActive"] = last_ts.isoformat() if last_ts else None
 
     logging.info(f"Fetched {len(workspaces)} workspaces from AWS.")
     return {ws["WorkspaceId"]: ws for ws in workspaces}
