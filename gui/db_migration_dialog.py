@@ -319,8 +319,9 @@ class DbMigrationDialog(QDialog):
         self._password_input.setEchoMode(QLineEdit.Password)
 
         layout.addWidget(QLabel(
-            "Leave username blank to use Windows / domain auth (Trusted_Connection).\n"
-            "Enter AD credentials explicitly when running on Linux."
+            "Leave username blank to connect as the current Windows user.\n"
+            "Enter DOMAIN\\username + password to connect as a different AD account\n"
+            "(uses Windows Authentication — no Mixed Mode required)."
         ))
 
         layout.addStretch()

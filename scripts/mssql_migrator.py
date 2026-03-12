@@ -24,7 +24,10 @@ Tables that do not exist in the source are skipped silently.
 from __future__ import annotations
 
 import argparse
+import ctypes
+import ctypes.wintypes
 import logging
+import platform
 import sqlite3
 import sys
 from pathlib import Path
@@ -174,6 +177,37 @@ _MSSQL_DDLS = {
 }
 
 
+def _logon_user_windows(username: str, password: str) -> ctypes.wintypes.HANDLE:
+    """Calls Windows LogonUserW with LOGON32_LOGON_NEW_CREDENTIALS.
+
+    This creates a token whose *network* identity is the supplied account
+    (equivalent to runas /netonly) without changing the local process identity.
+    Raises RuntimeError on failure.
+    """
+    LOGON32_LOGON_NEW_CREDENTIALS = 9
+    LOGON32_PROVIDER_DEFAULT = 0
+
+    if "\\" in username:
+        domain, user = username.split("\\", 1)
+    else:
+        domain, user = None, username
+
+    token = ctypes.wintypes.HANDLE()
+    ok = ctypes.windll.advapi32.LogonUserW(
+        user, domain, password,
+        LOGON32_LOGON_NEW_CREDENTIALS,
+        LOGON32_PROVIDER_DEFAULT,
+        ctypes.byref(token),
+    )
+    if not ok:
+        err = ctypes.windll.kernel32.GetLastError()
+        raise RuntimeError(
+            f"Windows LogonUser failed (error {err}). "
+            "Check username (DOMAIN\\user format) and password."
+        )
+    return token
+
+
 def _connect_mssql(
     server: str,
     database: str,
@@ -181,18 +215,44 @@ def _connect_mssql(
     username: str = "",
     password: str = "",
 ) -> pyodbc.Connection:
-    base = (
+    """Connect to SQL Server.
+
+    - No credentials → Trusted_Connection (current Windows session).
+    - Credentials + Windows → impersonate via LogonUser then Trusted_Connection.
+      This supports Windows-Auth-only servers without Mixed Mode.
+    - Credentials + non-Windows → SQL Server auth (UID/PWD); requires Mixed Mode.
+    """
+    trusted_str = (
         f"DRIVER={{ODBC Driver 17 for SQL Server}};"
         f"SERVER={server},{port};"
         f"DATABASE={database};"
+        "Trusted_Connection=yes;"
         "Encrypt=yes;"
         "TrustServerCertificate=yes;"
     )
-    if username:
-        conn_str = base + f"UID={username};PWD={password};"
-    else:
-        conn_str = base + "Trusted_Connection=yes;"
-    return pyodbc.connect(conn_str, timeout=30)
+    if not username:
+        return pyodbc.connect(trusted_str, timeout=30)
+
+    if platform.system() == "Windows":
+        token = _logon_user_windows(username, password)
+        try:
+            ctypes.windll.advapi32.ImpersonateLoggedOnUser(token)
+            conn = pyodbc.connect(trusted_str, timeout=30)
+        finally:
+            ctypes.windll.advapi32.RevertToSelf()
+            ctypes.windll.kernel32.CloseHandle(token)
+        return conn
+
+    # Non-Windows fallback: SQL Server auth (requires Mixed Mode on server)
+    sql_auth_str = (
+        f"DRIVER={{ODBC Driver 17 for SQL Server}};"
+        f"SERVER={server},{port};"
+        f"DATABASE={database};"
+        f"UID={username};PWD={password};"
+        "Encrypt=yes;"
+        "TrustServerCertificate=yes;"
+    )
+    return pyodbc.connect(sql_auth_str, timeout=30)
 
 
 def test_connection(
