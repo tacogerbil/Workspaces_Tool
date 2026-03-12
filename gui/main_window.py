@@ -42,6 +42,7 @@ from services.aws_ad_workspace_service import AwsAdWorkspaceService
 from services.csv_ingestion_service import CsvIngestionService
 from services.sccm_sync_service import SccmSyncService
 from gui.settings_dialog import SettingsDialog
+from gui.db_migration_dialog import DbMigrationDialog
 
 
 class UnifiedMainWindow(QMainWindow):
@@ -235,6 +236,18 @@ class UnifiedMainWindow(QMainWindow):
         settings_action.triggered.connect(self._open_settings)
         file_menu.addAction(settings_action)
 
+        file_menu.addSeparator()
+
+        migrate_action = QAction("&Migrate Database to SQL Server…", self)
+        migrate_action.setStatusTip("Copy a SQLite database to a SQL Server database")
+        migrate_action.triggered.connect(self._open_db_migration)
+        file_menu.addAction(migrate_action)
+
     def _open_settings(self) -> None:
         dialog = SettingsDialog(self.config_adapter, self)
         dialog.exec()
+
+    def _open_db_migration(self) -> None:
+        dialog = DbMigrationDialog(self, config_adapter=self.config_adapter)
+        dialog.exec()
+

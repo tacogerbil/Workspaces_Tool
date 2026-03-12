@@ -186,6 +186,34 @@ def _connect_mssql(server: str, database: str, port: int = 1433) -> pyodbc.Conne
     return pyodbc.connect(conn_str, timeout=30)
 
 
+def test_connection(server: str, database: str, port: int = 1433) -> tuple[bool, str]:
+    """Test MSSQL connectivity. Returns (success, message)."""
+    try:
+        conn = _connect_mssql(server, database, port)
+        conn.close()
+        return True, f"Connected to {server}/{database} successfully."
+    except Exception as exc:
+        return False, str(exc)
+
+
+def get_sqlite_table_info(sqlite_path: str) -> list[dict]:
+    """Return [{name, row_count}] for all known tables found in the SQLite file."""
+    found = []
+    try:
+        with sqlite3.connect(sqlite_path) as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT name FROM sqlite_master WHERE type='table'")
+            all_tables = [row[0] for row in cur.fetchall()]
+            for table in all_tables:
+                if table in _MSSQL_DDLS:
+                    cur.execute(f"SELECT COUNT(*) FROM [{table}]")
+                    count = cur.fetchone()[0]
+                    found.append({"name": table, "row_count": count})
+    except Exception as exc:
+        logging.error(f"SQLite scan failed: {exc}")
+    return found
+
+
 def _table_exists_mssql(cursor: pyodbc.Cursor, table: str) -> bool:
     cursor.execute(
         "SELECT 1 FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME=?", (table,)
@@ -212,22 +240,32 @@ def migrate(
     database: str,
     port: int = 1433,
     batch_size: int = 500,
+    progress_fn: Optional[callable] = None,
 ) -> None:
-    """Copies all known tables from a SQLite file to a MSSQL database."""
+    """Copies all known tables from a SQLite file to a MSSQL database.
+
+    Args:
+        progress_fn: Optional callable(message: str) invoked for each status
+                     update. When provided, messages are sent here in addition
+                     to the standard logger. Useful for GUI progress displays.
+    """
+    def _log(msg: str) -> None:
+        logging.info(msg)
+        if progress_fn:
+            progress_fn(msg)
+
     sqlite_path = str(Path(sqlite_path).resolve())
-    logging.info(f"Source SQLite: {sqlite_path}")
-    logging.info(f"Target MSSQL:  {server},{port}/{database}")
+    _log(f"Source SQLite: {sqlite_path}")
+    _log(f"Target MSSQL:  {server},{port}/{database}")
 
     source_tables = _sqlite_tables(sqlite_path)
     tables_to_migrate = [t for t in _MSSQL_DDLS if t in source_tables]
 
     if not tables_to_migrate:
-        logging.warning("No recognisable tables found in the SQLite file. Nothing to migrate.")
+        _log("⚠ No recognisable tables found in the SQLite file. Nothing to migrate.")
         return
 
-    logging.info(
-        f"Found {len(tables_to_migrate)} table(s) to migrate: {', '.join(tables_to_migrate)}"
-    )
+    _log(f"Found {len(tables_to_migrate)} table(s): {', '.join(tables_to_migrate)}")
 
     mssql_conn = _connect_mssql(server, database, port)
     mssql_cur = mssql_conn.cursor()
@@ -238,34 +276,30 @@ def migrate(
         for table in tables_to_migrate:
             # Create table in MSSQL if absent
             if not _table_exists_mssql(mssql_cur, table):
-                logging.info(f"Creating table [{table}] in MSSQL...")
+                _log(f"Creating table [{table}]…")
                 try:
                     mssql_cur.execute(_MSSQL_DDLS[table])
                     mssql_conn.commit()
                 except Exception as exc:
-                    logging.error(f"  Failed to create [{table}]: {exc}")
+                    _log(f"  ✗ Failed to create [{table}]: {exc}")
                     continue
 
             # Read source columns; filter to columns existing in source
             src_columns = _get_column_names(sqlite_conn, table)
-            logging.info(f"Migrating [{table}] ({len(src_columns)} cols)…")
-
             rows = sqlite_conn.execute(f"SELECT * FROM {table}").fetchall()
             if not rows:
-                logging.info(f"  [{table}] is empty — skipping.")
+                _log(f"  [{table}] is empty — skipping.")
                 continue
 
-            # Map to safe column names (skip IDENTITY columns like id, HistoryId, UsageId)
+            _log(f"Migrating [{table}] — {len(rows):,} rows…")
+
+            # Skip IDENTITY columns — SQL Server auto-generates them
             identity_cols = {"id", "HistoryId", "UsageId", "group_id"}
-            insert_cols = [c for c in src_columns if c not in identity_cols]
-            if not insert_cols:
-                insert_cols = src_columns
+            insert_cols = [c for c in src_columns if c not in identity_cols] or src_columns
 
             col_list = ", ".join(f"[{c}]" for c in insert_cols)
             placeholders = ", ".join("?" for _ in insert_cols)
-            insert_sql = (
-                f"INSERT INTO [{table}] ({col_list}) VALUES ({placeholders})"
-            )
+            insert_sql = f"INSERT INTO [{table}] ({col_list}) VALUES ({placeholders})"
 
             inserted, failed = 0, 0
             for i in range(0, len(rows), batch_size):
@@ -279,12 +313,13 @@ def migrate(
                 except Exception as exc:
                     mssql_conn.rollback()
                     failed += len(batch)
-                    logging.error(f"  Batch insert failed for [{table}]: {exc}")
+                    _log(f"  ✗ Batch failed for [{table}]: {exc}")
 
-            logging.info(f"  [{table}]: {inserted} rows inserted, {failed} failed.")
+            _log(f"  ✓ [{table}]: {inserted:,} rows inserted" +
+                 (f", {failed:,} failed" if failed else ""))
 
     mssql_conn.close()
-    logging.info("Migration complete.")
+    _log("✓ Migration complete.")
 
 
 def main() -> None:
