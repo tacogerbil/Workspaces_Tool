@@ -230,7 +230,6 @@ def fetch_ad_data(
     # Ensure domain is prepended to username
     if "\\" not in ad_user and search_base:
         # Extract the first DC component as a best-effort domain (e.g., 'DC=aac,DC=local' -> 'aac')
-        import re
         match = re.search(r"DC=([^,]+)", search_base, re.IGNORECASE)
         domain = match.group(1).upper() if match else "DOMAIN"
         ad_user = f"{domain}\\{ad_user}"
@@ -241,7 +240,6 @@ def fetch_ad_data(
     conn = Connection(server, user=ad_user, password=ad_password, auto_bind=True, read_only=True)
     if not conn.bound:
         raise ConnectionError(f"LDAP bind failed for server '{ad_server}'.")
-
 
     try:
         # Computer objects (WSAMZN-* pattern)

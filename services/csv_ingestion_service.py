@@ -199,4 +199,4 @@ class CsvIngestionService:
         self.db.execute_query("DELETE FROM software_inventory")
         self.db.execute_many(query, rows)
         logging.info("Data insertion complete.")
-        return len(records_to_insert)
+        return len(rows)

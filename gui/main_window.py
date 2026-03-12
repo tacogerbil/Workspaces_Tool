@@ -160,16 +160,32 @@ class UnifiedMainWindow(QMainWindow):
 
         SQLite: salt file lives next to the .db file (<db_path>.salt).
         MSSQL:  salt file lives in the app config directory (mssql.salt).
+        On first switch to MSSQL, the old SQLite salt is inherited so data
+        encrypted before migration decrypts correctly.
         The salt is never stored in config.ini.
         """
         try:
             from pathlib import Path
+            import shutil
             db_path = self.config_adapter.get_monitor_db_path()
             if db_path:
                 salt_file = Path(db_path + ".salt")
             else:
                 # MSSQL — no local db file; store salt next to config.ini
                 salt_file = self.config_adapter.config_path.parent / "mssql.salt"
+                # On first MSSQL startup, inherit the old SQLite salt so that
+                # data migrated from SQLite still decrypts correctly.
+                if not salt_file.exists():
+                    raw_cfg = self.config_adapter.load_config()
+                    old_sqlite_path = raw_cfg.get("Database", "path", fallback="")
+                    if old_sqlite_path:
+                        old_salt_file = Path(old_sqlite_path + ".salt")
+                        if old_salt_file.exists():
+                            shutil.copy2(old_salt_file, salt_file)
+                            logging.info(
+                                f"Inherited SQLite salt → mssql.salt "
+                                f"({old_salt_file} → {salt_file})"
+                            )
             if salt_file.exists():
                 salt = salt_file.read_bytes()
                 logging.info(f"Salt loaded from {salt_file}.")

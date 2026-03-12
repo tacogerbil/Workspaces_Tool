@@ -514,6 +514,9 @@ class AwsAdWorkspaceService:
         mode: str,
     ) -> None:
         """Dialect-agnostic persistence path (MSSQL-safe; less atomic)."""
+        if mode == "full" and aws_data:
+            self._archive_orphans_generic(aws_data, ad_devices)
+
         for ws_id, ws in aws_data.items():
             props = ws.get("WorkspaceProperties", {})
             cname = ws.get("ComputerName")
@@ -545,6 +548,122 @@ class AwsAdWorkspaceService:
                     original_date, today_str, ws.get("DirectoryId"),
                 ),
             )
+
+        if ad_devices:
+            self._db.execute_query("DELETE FROM ad_devices")
+            for d in ad_devices.values():
+                self._db.execute_query(
+                    "INSERT INTO ad_devices (ComputerName, Description, CreationDate, DeviceADStatus) "
+                    "VALUES (?,?,?,?)",
+                    (d["ComputerName"], d["Description"], d["CreationDate"], d["DeviceADStatus"]),
+                )
+
+        if ad_users:
+            for uname, udata in ad_users.items():
+                self._db.execute_query(
+                    """MERGE INTO ad_users AS t
+                    USING (SELECT ? AS UserName) AS s ON t.UserName = s.UserName
+                    WHEN MATCHED THEN UPDATE SET
+                        FullName=?, UserADStatus=?, Email=?, Company=?
+                    WHEN NOT MATCHED THEN INSERT
+                        (UserName, FullName, UserADStatus, Email, Company)
+                        VALUES (?,?,?,?,?);""",
+                    (
+                        uname,
+                        udata["FullName"], udata["UserADStatus"], udata["Email"], udata["Company"],
+                        uname, udata["FullName"], udata["UserADStatus"], udata["Email"], udata["Company"],
+                    ),
+                )
+
+        if ad_devices:
+            for cname_hist, _ in ad_devices.items():
+                ws_df = self._db.read_sql(
+                    "SELECT WorkspaceId FROM workspaces WHERE ComputerName=?", (cname_hist,)
+                )
+                for row in ws_df.to_dict("records"):
+                    self._db.execute_query(
+                        """MERGE INTO computer_name_history AS t
+                        USING (SELECT ? AS WorkspaceId, ? AS ComputerName) AS s
+                            ON t.WorkspaceId = s.WorkspaceId AND t.ComputerName = s.ComputerName
+                        WHEN NOT MATCHED THEN INSERT (WorkspaceId, ComputerName, FirstSeenDate)
+                            VALUES (?,?,?);""",
+                        (row["WorkspaceId"], cname_hist, row["WorkspaceId"], cname_hist, today_str),
+                    )
+
+    def _archive_orphans_generic(self, aws_data: Dict, ad_devices: Dict) -> None:
+        """Archives workspaces absent from both AWS fetch and AD (MSSQL path)."""
+        db_ws_df = self._db.read_sql("SELECT WorkspaceId, ComputerName FROM workspaces")
+        if db_ws_df.empty:
+            return
+        aws_ids = set(aws_data.keys())
+        ad_names = set(ad_devices.keys())
+
+        for row in db_ws_df.to_dict("records"):
+            ws_id = row["WorkspaceId"]
+            cname = row["ComputerName"]
+            if ws_id not in aws_ids and cname not in ad_names:
+                self._archive_single_generic(ws_id)
+
+    def _archive_single_generic(self, workspace_id: str) -> None:
+        """Moves one workspace from live tables to historical_archives (MSSQL path)."""
+        ws_df = self._db.read_sql(
+            "SELECT * FROM workspaces WHERE WorkspaceId=?", (workspace_id,)
+        )
+        if ws_df.empty:
+            return
+        ws_row = ws_df.to_dict("records")[0]
+
+        user_df = self._db.read_sql(
+            "SELECT * FROM ad_users WHERE UserName=?", (ws_row.get("UserName"),)
+        )
+        user_row = user_df.to_dict("records")[0] if not user_df.empty else None
+
+        device_df = self._db.read_sql(
+            "SELECT * FROM ad_devices WHERE ComputerName=?", (ws_row.get("ComputerName"),)
+        )
+        device_row = device_df.to_dict("records")[0] if not device_df.empty else None
+
+        usage_df = self._db.read_sql(
+            "SELECT SUM(UsedHours) as total FROM usage_history WHERE WorkspaceId=?",
+            (workspace_id,),
+        )
+        total_hours = (
+            usage_df["total"].iloc[0] if not usage_df.empty else 0.0
+        ) or 0.0
+
+        archive = build_archive_record(
+            workspace_row=ws_row,
+            user_row=user_row,
+            device_row=device_row,
+            total_usage_hours=total_hours,
+            encryptor=self._encryptor,
+            pricing_data=self._get_pricing_data(),
+        )
+
+        self._db.execute_query(
+            """MERGE INTO historical_archives AS t
+            USING (SELECT ? AS WorkspaceId, ? AS ArchivedDate) AS s
+                ON t.WorkspaceId = s.WorkspaceId AND t.ArchivedDate = s.ArchivedDate
+            WHEN NOT MATCHED THEN INSERT (
+                ArchivedDate, WorkspaceId, ComputerName, UserName, FullName,
+                Email, Company, FinalStatus, OriginalCreationDate, Notes,
+                LastAWSStatus, LastUserStatus, LastDeviceStatus, LastDaysInactive,
+                OwnershipCost, NonUsageCost, DirectoryId, RunningMode,
+                ComputeType, RootVolumeSize, UserVolumeSize
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?);""",
+            (
+                archive["WorkspaceId"], archive["ArchivedDate"],
+                *archive.values(),
+            ),
+        )
+        self._db.execute_query("DELETE FROM workspaces WHERE WorkspaceId=?", (workspace_id,))
+        self._db.execute_query(
+            "DELETE FROM computer_name_history WHERE WorkspaceId=?", (workspace_id,)
+        )
+        self._db.execute_query(
+            "DELETE FROM usage_history WHERE WorkspaceId=?", (workspace_id,)
+        )
+        logging.info(f"Archived workspace {workspace_id} (MSSQL).")
 
     # ------------------------------------------------------------------
     # GUI data queries

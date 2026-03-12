@@ -399,20 +399,25 @@ class DashboardView(QWidget):
         self._refresh_from_db()
 
     def _open_column_config(self) -> None:
+        from PySide6.QtWidgets import QDialog
         dlg = ColumnConfigDialog(
             available_columns=list(COLUMN_REGISTRY.keys()),
             active_columns=self._active_columns,
             registry=COLUMN_REGISTRY,
             parent=self,
         )
-        if dlg.exec() != ColumnConfigDialog.Accepted:
+        if dlg.exec() != QDialog.Accepted:
             return
         new_cols = dlg.selected_columns()
         if not new_cols:
             return
         self._active_columns = new_cols
+        self._grid_columns = []  # force full rebuild regardless of column sameness
         if self._config:
-            self._config.set_dashboard_columns(new_cols)
+            try:
+                self._config.set_dashboard_columns(new_cols)
+            except Exception as exc:
+                logging.warning(f"Could not save column prefs: {exc}")
         self._refresh_from_db()
 
     def _export_to_excel(self) -> None:

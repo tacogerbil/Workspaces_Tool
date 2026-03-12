@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QListWidget,
+    QListWidgetItem,
     QPushButton,
     QVBoxLayout,
     QWidget,
@@ -60,15 +61,19 @@ class ColumnConfigDialog(QDialog):
     # ------------------------------------------------------------------
 
     def _setup_ui(self) -> None:
-        root = QHBoxLayout(self)
+        outer = QVBoxLayout(self)
+
+        # Panels row
+        panels = QHBoxLayout()
 
         # Left panel — available (not visible) columns
         left = QVBoxLayout()
-        left.addWidget(QLabel("Available columns:"))
+        left.addWidget(QLabel("Available columns (double-click or select + Add →):"))
         self._lst_available = QListWidget()
         self._lst_available.setDragDropMode(QListWidget.NoDragDrop)
+        self._lst_available.itemDoubleClicked.connect(self._add_column)
         left.addWidget(self._lst_available)
-        root.addLayout(left)
+        panels.addLayout(left)
 
         # Centre transfer buttons
         mid = QVBoxLayout()
@@ -80,13 +85,14 @@ class ColumnConfigDialog(QDialog):
         mid.addWidget(self._btn_add)
         mid.addWidget(self._btn_remove)
         mid.addStretch()
-        root.addLayout(mid)
+        panels.addLayout(mid)
 
         # Right panel — visible columns (ordered)
         right = QVBoxLayout()
         right.addWidget(QLabel("Visible columns (top = leftmost):"))
         self._lst_active = QListWidget()
         self._lst_active.setDragDropMode(QListWidget.NoDragDrop)
+        self._lst_active.itemDoubleClicked.connect(self._remove_column)
         right.addWidget(self._lst_active)
 
         # Reorder buttons
@@ -98,16 +104,15 @@ class ColumnConfigDialog(QDialog):
         order_row.addWidget(self._btn_up)
         order_row.addWidget(self._btn_dn)
         right.addLayout(order_row)
-        root.addLayout(right)
+        panels.addLayout(right)
+
+        outer.addLayout(panels)
 
         # Dialog buttons (OK / Cancel)
-        outer = QVBoxLayout()
-        outer.addLayout(root)
         btn_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         btn_box.accepted.connect(self.accept)
         btn_box.rejected.connect(self.reject)
         outer.addWidget(btn_box)
-        self.setLayout(outer)
 
     # ------------------------------------------------------------------
     # List population
@@ -120,45 +125,47 @@ class ColumnConfigDialog(QDialog):
     def _populate_lists(self) -> None:
         self._lst_available.clear()
         for col_id in self._inactive:
-            self._lst_available.addItem(self._display(col_id))
-            self._lst_available.item(self._lst_available.count() - 1).setData(
-                Qt.UserRole, col_id
-            )
+            item = QListWidgetItem(self._display(col_id))
+            item.setData(Qt.UserRole, col_id)
+            self._lst_available.addItem(item)
 
         self._lst_active.clear()
         for col_id in self._active:
-            self._lst_active.addItem(self._display(col_id))
-            self._lst_active.item(self._lst_active.count() - 1).setData(
-                Qt.UserRole, col_id
-            )
+            item = QListWidgetItem(self._display(col_id))
+            item.setData(Qt.UserRole, col_id)
+            self._lst_active.addItem(item)
 
     # ------------------------------------------------------------------
     # Transfer actions
     # ------------------------------------------------------------------
 
-    def _add_column(self) -> None:
+    def _add_column(self, _clicked_item: Optional[QListWidgetItem] = None) -> None:
         row = self._lst_available.currentRow()
         if row < 0:
             return
-        item = self._lst_available.takeItem(row)
-        col_id: str = item.data(Qt.UserRole)
+        taken = self._lst_available.takeItem(row)
+        col_id: str = taken.data(Qt.UserRole)
+        if col_id is None:
+            return
         self._inactive.remove(col_id)
         self._active.append(col_id)
-        self._lst_active.addItem(item.text())
-        self._lst_active.item(self._lst_active.count() - 1).setData(Qt.UserRole, col_id)
+        new_item = QListWidgetItem(taken.text())
+        new_item.setData(Qt.UserRole, col_id)
+        self._lst_active.addItem(new_item)
 
-    def _remove_column(self) -> None:
+    def _remove_column(self, _clicked_item: Optional[QListWidgetItem] = None) -> None:
         row = self._lst_active.currentRow()
         if row < 0:
             return
-        item = self._lst_active.takeItem(row)
-        col_id: str = item.data(Qt.UserRole)
+        taken = self._lst_active.takeItem(row)
+        col_id: str = taken.data(Qt.UserRole)
+        if col_id is None:
+            return
         self._active.remove(col_id)
         self._inactive.append(col_id)
-        self._lst_available.addItem(item.text())
-        self._lst_available.item(self._lst_available.count() - 1).setData(
-            Qt.UserRole, col_id
-        )
+        new_item = QListWidgetItem(taken.text())
+        new_item.setData(Qt.UserRole, col_id)
+        self._lst_available.addItem(new_item)
 
     def _move_up(self) -> None:
         row = self._lst_active.currentRow()
