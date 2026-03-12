@@ -545,7 +545,14 @@ class DbMigrationDialog(QDialog):
     # ------------------------------------------------------------------
 
     def _refresh_migrate_button(self) -> None:
-        source_ready = bool(self._source_path.text()) and self._source_table.rowCount() > 0
+        if self._rb_sqlite.isChecked():
+            source_ready = bool(self._source_path.text()) and self._source_table.rowCount() > 0
+        else:
+            source_ready = (
+                bool(self._src_server_input.text().strip())
+                and bool(self._src_database_input.text().strip())
+                and self._source_table.rowCount() > 0
+            )
         self._btn_migrate.setEnabled(
             source_ready and self._connection_verified and _MIGRATOR_AVAILABLE
         )
@@ -619,8 +626,15 @@ class DbMigrationDialog(QDialog):
         server   = self._server_input.text().strip()
         database = self._database_input.text().strip()
         port     = self._port_input.text().strip() or "1433"
+        username = self._username_input.text().strip()
+        password = self._password_input.text()
 
-        mssql_cfg = {"type": "mssql", "server": server, "port": port, "database": database}
+        mssql_cfg: dict[str, str] = {
+            "type": "mssql", "server": server, "port": port, "database": database,
+        }
+        if username:
+            mssql_cfg["username"] = username
+            mssql_cfg["password"] = password
 
         if self._detected_db_type in ("monitoring", "both"):
             self._config.set_db_backend_config(mssql_cfg)

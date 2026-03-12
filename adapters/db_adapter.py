@@ -14,7 +14,10 @@ Only DDL helpers and upsert idioms differ.
 from __future__ import annotations
 
 import abc
+import ctypes
+import ctypes.wintypes
 import logging
+import platform
 import sqlite3
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
@@ -168,15 +171,69 @@ class SqliteBackend(DbBackend):
 
 
 # ---------------------------------------------------------------------------
+# Windows impersonation helper
+# ---------------------------------------------------------------------------
+
+def _impersonated_connect(conn_str: str, username: str, password: str) -> "pyodbc.Connection":
+    """Open a pyodbc connection under a different Windows identity.
+
+    Uses LogonUserW with LOGON32_LOGON_NEW_CREDENTIALS (the same semantics
+    as ``runas /netonly``).  The *network* identity becomes the supplied
+    account while the local process identity is unchanged.
+    """
+    LOGON32_LOGON_NEW_CREDENTIALS = 9
+    LOGON32_PROVIDER_WINNT50 = 3
+
+    if "\\" in username:
+        domain, user = username.split("\\", 1)
+    else:
+        domain, user = None, username
+
+    _LogonUserW = ctypes.windll.advapi32.LogonUserW
+    _LogonUserW.argtypes = [
+        ctypes.wintypes.LPCWSTR,
+        ctypes.wintypes.LPCWSTR,
+        ctypes.wintypes.LPCWSTR,
+        ctypes.wintypes.DWORD,
+        ctypes.wintypes.DWORD,
+        ctypes.POINTER(ctypes.wintypes.HANDLE),
+    ]
+    _LogonUserW.restype = ctypes.wintypes.BOOL
+
+    token = ctypes.wintypes.HANDLE()
+    ok = _LogonUserW(
+        user, domain, password,
+        LOGON32_LOGON_NEW_CREDENTIALS,
+        LOGON32_PROVIDER_WINNT50,
+        ctypes.byref(token),
+    )
+    if not ok:
+        err = ctypes.GetLastError()
+        raise RuntimeError(
+            f"Windows LogonUser failed (error {err}). "
+            "Check username (DOMAIN\\user) and password."
+        )
+    try:
+        ctypes.windll.advapi32.ImpersonateLoggedOnUser(token)
+        conn = pyodbc.connect(conn_str, timeout=30)
+    finally:
+        ctypes.windll.advapi32.RevertToSelf()
+        ctypes.windll.kernel32.CloseHandle(token)
+    return conn
+
+
+# ---------------------------------------------------------------------------
 # MSSQL backend
 # ---------------------------------------------------------------------------
 
 class MssqlBackend(DbBackend):
     """pyodbc-based backend using Windows/domain authentication.
 
-    Connection string uses Trusted_Connection=yes — the logged-in domain
-    account is used automatically (same credentials as the AD login).
-    No separate SQL Server account is required.
+    When ``username`` and ``password`` are supplied in the config dict the
+    backend impersonates that Windows account (LogonUser + NEW_CREDENTIALS)
+    before opening each connection, so Trusted_Connection still works on
+    Windows-Auth-only servers even when the process owner differs from the
+    SQL Server login.
     """
 
     def __init__(self, config: Dict[str, str]) -> None:
@@ -186,6 +243,8 @@ class MssqlBackend(DbBackend):
             )
         self._config = config
         self._conn_str = self._build_conn_str(config)
+        self._username = config.get("username", "")
+        self._password = config.get("password", "")
 
     @staticmethod
     def _build_conn_str(cfg: Dict[str, str]) -> str:
@@ -207,6 +266,10 @@ class MssqlBackend(DbBackend):
         return "mssql"
 
     def _connect(self) -> pyodbc.Connection:
+        if self._username and platform.system() == "Windows":
+            return _impersonated_connect(
+                self._conn_str, self._username, self._password,
+            )
         return pyodbc.connect(self._conn_str, timeout=30)
 
     def execute_script(self, script: str) -> None:

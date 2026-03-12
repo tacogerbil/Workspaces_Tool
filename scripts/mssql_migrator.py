@@ -177,6 +177,20 @@ _MSSQL_DDLS = {
 }
 
 
+def _parse_domain_user(username: str) -> tuple[str | None, str]:
+    """Split 'DOMAIN\\user' or 'user@domain.com' into (domain, user).
+
+    Returns (None, username) if no domain separator is found.
+    """
+    if "\\" in username:
+        domain, user = username.split("\\", 1)
+        return domain, user
+    if "@" in username:
+        # UPN format: user@domain.com — LogonUserW accepts this with domain=None
+        return None, username
+    return None, username
+
+
 def _logon_user_windows(username: str, password: str) -> ctypes.wintypes.HANDLE:
     """Calls Windows LogonUserW with LOGON32_LOGON_NEW_CREDENTIALS.
 
@@ -185,26 +199,38 @@ def _logon_user_windows(username: str, password: str) -> ctypes.wintypes.HANDLE:
     Raises RuntimeError on failure.
     """
     LOGON32_LOGON_NEW_CREDENTIALS = 9
-    LOGON32_PROVIDER_DEFAULT = 0
+    LOGON32_PROVIDER_WINNT50 = 3      # Active Directory provider
 
-    if "\\" in username:
-        domain, user = username.split("\\", 1)
-    else:
-        domain, user = None, username
+    domain, user = _parse_domain_user(username)
+
+    # Declare argtypes so ctypes marshals the wide strings correctly
+    _LogonUserW = ctypes.windll.advapi32.LogonUserW
+    _LogonUserW.argtypes = [
+        ctypes.wintypes.LPCWSTR,       # lpszUsername
+        ctypes.wintypes.LPCWSTR,       # lpszDomain
+        ctypes.wintypes.LPCWSTR,       # lpszPassword
+        ctypes.wintypes.DWORD,         # dwLogonType
+        ctypes.wintypes.DWORD,         # dwLogonProvider
+        ctypes.POINTER(ctypes.wintypes.HANDLE),  # phToken
+    ]
+    _LogonUserW.restype = ctypes.wintypes.BOOL
 
     token = ctypes.wintypes.HANDLE()
-    ok = ctypes.windll.advapi32.LogonUserW(
-        user, domain, password,
+    ok = _LogonUserW(
+        user,
+        domain,          # None → NULL pointer, which is valid for UPN
+        password,
         LOGON32_LOGON_NEW_CREDENTIALS,
-        LOGON32_PROVIDER_DEFAULT,
+        LOGON32_PROVIDER_WINNT50,
         ctypes.byref(token),
     )
     if not ok:
-        err = ctypes.windll.kernel32.GetLastError()
+        err = ctypes.GetLastError()
         raise RuntimeError(
             f"Windows LogonUser failed (error {err}). "
             "Check username (DOMAIN\\user format) and password."
         )
+    logging.info("LogonUser succeeded for domain=%s user=%s", domain, user)
     return token
 
 
