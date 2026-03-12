@@ -418,6 +418,7 @@ class AwsAdWorkspaceService:
                     "REPLACE INTO ad_devices VALUES (?,?,?,?)",
                     [tuple(d.values()) for d in ad_devices.values()],
                 )
+                self._recover_phantoms_sqlite(c, today_str)
             if ad_users:
                 self._upsert_ad_users_sqlite(c, ad_users)
             if aws_data:
@@ -562,6 +563,41 @@ class AwsAdWorkspaceService:
                 (ws_id, new_active, today_str),
             )
 
+    def _recover_phantoms_sqlite(self, cursor: Any, today_str: str) -> None:
+        """Restores incorrectly-archived records back to workspaces as PHANTOM (SQLite path).
+
+        Records in historical_archives with FinalStatus 'DELETED' or 'Archived (Deleted)'
+        whose ComputerName still exists in ad_devices were archived by old wrong logic.
+        They should be PHANTOM, not DELETED — restore them.
+        """
+        cursor.execute(
+            """INSERT OR IGNORE INTO workspaces
+                (WorkspaceId, ComputerName, UserName, AWSStatus, DaysInactive,
+                 RunningMode, ComputeType, RootVolumeSize, UserVolumeSize,
+                 OriginalCreationDate, LastSeenDate, DirectoryId)
+               SELECT ha.WorkspaceId, ha.ComputerName, ha.UserName, 'PHANTOM',
+                      ha.LastDaysInactive, ha.RunningMode, ha.ComputeType,
+                      ha.RootVolumeSize, ha.UserVolumeSize, ha.OriginalCreationDate,
+                      ?, ha.DirectoryId
+               FROM historical_archives ha
+               INNER JOIN ad_devices d ON ha.ComputerName = d.ComputerName
+               WHERE ha.FinalStatus IN ('DELETED', 'Archived (Deleted)')
+               AND ha.WorkspaceId IS NOT NULL""",
+            (today_str,),
+        )
+        recovered = cursor.rowcount
+        if recovered > 0:
+            logging.warning(
+                f"[Recovery] Restored {recovered} PHANTOM workspace(s) from historical_archives "
+                f"(ComputerName still present in AD — were incorrectly archived)."
+            )
+            cursor.execute(
+                """DELETE FROM historical_archives
+                   WHERE FinalStatus IN ('DELETED', 'Archived (Deleted)')
+                   AND ComputerName IN (SELECT ComputerName FROM ad_devices)
+                   AND WorkspaceId IS NOT NULL"""
+            )
+
     def _upsert_ad_users_sqlite(self, cursor: Any, ad_users: Dict) -> None:
         for uname, udata in ad_users.items():
             cursor.execute(
@@ -641,6 +677,7 @@ class AwsAdWorkspaceService:
                     "VALUES (?,?,?,?)",
                     (d["ComputerName"], d["Description"], d["CreationDate"], d["DeviceADStatus"]),
                 )
+            self._recover_phantoms_generic(today_str)
 
         if ad_users:
             for uname, udata in ad_users.items():
@@ -691,6 +728,56 @@ class AwsAdWorkspaceService:
                     VALUES (?,?,?);""",
                 (ws_id, new_active, ws_id, new_active, today_str),
             )
+
+    def _recover_phantoms_generic(self, today_str: str) -> None:
+        """Restores incorrectly-archived records back to workspaces as PHANTOM (MSSQL path).
+
+        Records in historical_archives with FinalStatus 'DELETED' or 'Archived (Deleted)'
+        whose ComputerName still exists in ad_devices were archived by old wrong logic.
+        They should be PHANTOM, not DELETED — restore them.
+        """
+        candidates_df = self._db.read_sql(
+            """SELECT ha.WorkspaceId, ha.ComputerName, ha.UserName, ha.LastDaysInactive,
+                      ha.RunningMode, ha.ComputeType, ha.RootVolumeSize, ha.UserVolumeSize,
+                      ha.OriginalCreationDate, ha.DirectoryId
+               FROM historical_archives ha
+               INNER JOIN ad_devices d ON ha.ComputerName = d.ComputerName
+               WHERE ha.FinalStatus IN ('DELETED', 'Archived (Deleted)')
+               AND ha.WorkspaceId IS NOT NULL"""
+        )
+        if candidates_df.empty:
+            return
+
+        for row in candidates_df.to_dict("records"):
+            ws_id = row["WorkspaceId"]
+            self._db.execute_query(
+                """MERGE INTO workspaces AS t
+                   USING (SELECT ? AS WorkspaceId) AS s ON t.WorkspaceId = s.WorkspaceId
+                   WHEN NOT MATCHED THEN INSERT (
+                       WorkspaceId, ComputerName, UserName, AWSStatus, DaysInactive,
+                       RunningMode, ComputeType, RootVolumeSize, UserVolumeSize,
+                       OriginalCreationDate, LastSeenDate, DirectoryId
+                   ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?);""",
+                (
+                    ws_id,
+                    ws_id, row.get("ComputerName"), row.get("UserName"), "PHANTOM",
+                    row.get("LastDaysInactive"), row.get("RunningMode"), row.get("ComputeType"),
+                    row.get("RootVolumeSize"), row.get("UserVolumeSize"),
+                    row.get("OriginalCreationDate"), today_str, row.get("DirectoryId"),
+                ),
+            )
+
+        count = len(candidates_df)
+        logging.warning(
+            f"[Recovery] Restored {count} PHANTOM workspace(s) from historical_archives "
+            f"(ComputerName still present in AD — were incorrectly archived)."
+        )
+        self._db.execute_query(
+            """DELETE FROM historical_archives
+               WHERE FinalStatus IN ('DELETED', 'Archived (Deleted)')
+               AND ComputerName IN (SELECT ComputerName FROM ad_devices)
+               AND WorkspaceId IS NOT NULL"""
+        )
 
     def _archive_orphans_generic(self, aws_data: Dict, ad_devices: Dict) -> None:
         """Classifies workspaces no longer present in AWS (MSSQL path).
