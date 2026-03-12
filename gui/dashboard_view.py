@@ -122,12 +122,14 @@ class DashboardView(QWidget):
         workspace_service: Any = None,
         encryptor: Any = None,
         config_adapter: Any = None,
+        read_only: bool = False,
     ) -> None:
         super().__init__(parent)
         self._db = db_adapter
         self._service = workspace_service
         self._encryptor = encryptor
         self._config = config_adapter
+        self._read_only = read_only
         self._pool = QThreadPool.globalInstance()
 
         # Resolve scripts dir (execution/ root) for alias + pricing loading
@@ -163,7 +165,7 @@ class DashboardView(QWidget):
         self._db_timer.start(30_000)
 
         self._refresh_from_db()
-        if self._service:
+        if self._service and not self._read_only:
             self._trigger_sync(mode="full")
 
     # ------------------------------------------------------------------
@@ -198,6 +200,9 @@ class DashboardView(QWidget):
         self._btn_refresh = QPushButton("🔄  Refresh from AWS & AD")
         self._btn_refresh.setFixedHeight(32)
         self._btn_refresh.clicked.connect(lambda: self._trigger_sync("full"))
+        if self._read_only:
+            self._btn_refresh.setEnabled(False)
+            self._btn_refresh.setToolTip("Read-only mode — sync requires write access")
 
         self._btn_reload_aliases = QPushButton("🔄 Reload Aliases")
         self._btn_reload_aliases.setFixedHeight(32)
@@ -766,8 +771,11 @@ class DashboardView(QWidget):
         menu.exec(self._tree.viewport().mapToGlobal(pos))
 
     def _on_double_click(self, proxy_index) -> None:
-        if not proxy_index.isValid(): return
-        
+        if not proxy_index.isValid():
+            return
+        if self._read_only:
+            return
+
         # Determine exactly which column was clicked
         col_id = self._active_columns[proxy_index.column()]
         if col_id != "Notes":

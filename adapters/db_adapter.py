@@ -306,6 +306,20 @@ class MssqlBackend(DbBackend):
             )
             return cur.fetchone() is not None
 
+    def check_write_permission(self) -> bool:
+        """Return True if the connected account has INSERT permission on this database."""
+        try:
+            with self._connect() as conn:
+                cur = conn.cursor()
+                cur.execute(
+                    "SELECT HAS_PERMS_BY_NAME(DB_NAME(), 'DATABASE', 'INSERT') AS can_insert"
+                )
+                row = cur.fetchone()
+                return bool(row and row[0])
+        except Exception as exc:
+            logging.warning(f"Write permission check failed: {exc}")
+            return False
+
 
 # ---------------------------------------------------------------------------
 # Type mapping helper
@@ -356,6 +370,7 @@ class DbAdapter:
             if not db_path:
                 raise ValueError("db_path is required when using the SQLite backend.")
             self._backend = SqliteBackend(db_path)
+        self._read_only: Optional[bool] = None   # None = not yet checked
 
     # Delegate all public API directly to the selected backend
 
@@ -369,6 +384,21 @@ class DbAdapter:
         if isinstance(self._backend, SqliteBackend):
             return self._backend._db_path
         return None
+
+    @property
+    def is_read_only(self) -> bool:
+        """True if the connected account lacks write permission.
+
+        SQLite is always writeable (local file).
+        MSSQL result is checked once via HAS_PERMS_BY_NAME and cached for the session.
+        """
+        if self._backend.dialect == "sqlite":
+            return False
+        if self._read_only is None:
+            self._read_only = not self._backend.check_write_permission()
+            if self._read_only:
+                logging.warning("MSSQL connection is read-only — write operations disabled.")
+        return self._read_only
 
     def execute_script(self, script: str) -> None:
         self._backend.execute_script(script)

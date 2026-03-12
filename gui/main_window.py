@@ -178,6 +178,19 @@ class UnifiedMainWindow(QMainWindow):
         header.setAlignment(Qt.AlignCenter)
         root.addWidget(header)
 
+        # Read-only banner — shown when the MSSQL account lacks write permission
+        if self.db_adapter.is_read_only:
+            banner = QLabel(
+                "⚠  Read-only mode — your account has SELECT access only. "
+                "Sync, notes editing, and all write operations are disabled."
+            )
+            banner.setAlignment(Qt.AlignCenter)
+            banner.setStyleSheet(
+                "background:#7a5c00;color:white;font-weight:bold;"
+                "padding:6px;border-radius:4px;margin:0 8px;"
+            )
+            root.addWidget(banner)
+
         tabs = QTabWidget()
         tabs.setDocumentMode(True)
         root.addWidget(tabs)
@@ -188,6 +201,7 @@ class UnifiedMainWindow(QMainWindow):
                 workspace_service=self.workspace_service,
                 encryptor=self.encryptor,
                 config_adapter=self.config_adapter,
+                read_only=self.db_adapter.is_read_only,
             ),
             "📊 Dashboard",
         )

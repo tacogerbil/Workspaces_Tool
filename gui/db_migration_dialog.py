@@ -23,6 +23,7 @@ from PySide6.QtCore import (
 )
 from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import (
+    QButtonGroup,
     QDialog,
     QFileDialog,
     QGroupBox,
@@ -33,8 +34,10 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QProgressBar,
     QPushButton,
+    QRadioButton,
     QSizePolicy,
     QSplitter,
+    QStackedWidget,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -50,7 +53,13 @@ for _p in (_exec_dir, _scripts_dir):
         sys.path.insert(0, _p)
 
 try:
-    from mssql_migrator import migrate, test_connection, get_sqlite_table_info
+    from mssql_migrator import (
+        migrate,
+        migrate_mssql_to_mssql,
+        test_connection,
+        get_sqlite_table_info,
+        get_mssql_table_info,
+    )
     _MIGRATOR_AVAILABLE = True
 except ImportError:
     _MIGRATOR_AVAILABLE = False
@@ -96,6 +105,30 @@ class _MigrationWorker(QRunnable):
             self.signals.done.emit(True)
         except Exception as exc:
             logging.error("Migration worker error: %s", exc, exc_info=True)
+            self.signals.log.emit(f"✗ Fatal error: {exc}")
+            self.signals.done.emit(False)
+
+
+class _MssqlToMssqlWorker(QRunnable):
+    def __init__(
+        self,
+        src_server: str, src_database: str, src_port: int,
+        dst_server: str, dst_database: str, dst_port: int,
+    ) -> None:
+        super().__init__()
+        self._src = (src_server, src_database, src_port)
+        self._dst = (dst_server, dst_database, dst_port)
+        self.signals = _MigrationSignals()
+
+    def run(self) -> None:
+        try:
+            migrate_mssql_to_mssql(
+                *self._src, *self._dst,
+                progress_fn=lambda msg: self.signals.log.emit(msg),
+            )
+            self.signals.done.emit(True)
+        except Exception as exc:
+            logging.error("MSSQL→MSSQL worker error: %s", exc, exc_info=True)
             self.signals.log.emit(f"✗ Fatal error: {exc}")
             self.signals.done.emit(False)
 
@@ -152,22 +185,77 @@ class DbMigrationDialog(QDialog):
         root.addWidget(self._build_bottom_panel())
 
     def _build_source_panel(self) -> QGroupBox:
-        box = QGroupBox("Source — SQLite Database")
+        box = QGroupBox("Source")
         layout = QVBoxLayout(box)
 
-        # File picker row
-        row = QHBoxLayout()
+        # Source type toggle
+        type_row = QHBoxLayout()
+        self._src_type_group = QButtonGroup(self)
+        self._rb_sqlite = QRadioButton("SQLite file")
+        self._rb_mssql  = QRadioButton("SQL Server")
+        self._rb_sqlite.setChecked(True)
+        self._src_type_group.addButton(self._rb_sqlite, 0)
+        self._src_type_group.addButton(self._rb_mssql,  1)
+        self._rb_sqlite.toggled.connect(self._on_source_type_changed)
+        type_row.addWidget(self._rb_sqlite)
+        type_row.addWidget(self._rb_mssql)
+        type_row.addStretch()
+        layout.addLayout(type_row)
+
+        # Stacked input area — page 0: SQLite, page 1: SQL Server
+        self._src_stack = QStackedWidget()
+        layout.addWidget(self._src_stack)
+
+        # Page 0: SQLite file picker
+        sqlite_page = QWidget()
+        sqlite_layout = QVBoxLayout(sqlite_page)
+        sqlite_layout.setContentsMargins(0, 0, 0, 0)
+        file_row = QHBoxLayout()
         self._source_path = QLineEdit()
         self._source_path.setPlaceholderText("Select a .db or .sqlite file…")
         self._source_path.setReadOnly(True)
         btn_browse = QPushButton("Browse…")
         btn_browse.setFixedWidth(80)
         btn_browse.clicked.connect(self._browse_source)
-        row.addWidget(self._source_path)
-        row.addWidget(btn_browse)
-        layout.addLayout(row)
+        file_row.addWidget(self._source_path)
+        file_row.addWidget(btn_browse)
+        sqlite_layout.addLayout(file_row)
+        self._src_stack.addWidget(sqlite_page)
 
-        # Table preview
+        # Page 1: SQL Server source fields
+        mssql_page = QWidget()
+        mssql_layout = QVBoxLayout(mssql_page)
+        mssql_layout.setContentsMargins(0, 0, 0, 0)
+
+        def _src_field(label: str, placeholder: str, default: str = "") -> QLineEdit:
+            mssql_layout.addWidget(QLabel(label))
+            w = QLineEdit()
+            w.setPlaceholderText(placeholder)
+            if default:
+                w.setText(default)
+            mssql_layout.addWidget(w)
+            return w
+
+        self._src_server_input   = _src_field("Server / IP", "e.g. SQLSERVER01")
+        self._src_port_input     = _src_field("Port", "1433", "1433")
+        self._src_database_input = _src_field("Database name", "e.g. WorkspacesDB")
+
+        src_test_row = QHBoxLayout()
+        self._btn_src_test = QPushButton("🔌  Test Source Connection")
+        self._btn_src_test.clicked.connect(self._test_source_connection)
+        self._src_conn_status = QLabel("")
+        self._src_conn_status.setWordWrap(True)
+        src_test_row.addWidget(self._btn_src_test)
+        src_test_row.addWidget(self._src_conn_status, stretch=1)
+        mssql_layout.addLayout(src_test_row)
+
+        btn_scan = QPushButton("🔍  Scan Source Database")
+        btn_scan.clicked.connect(self._scan_mssql_source)
+        mssql_layout.addWidget(btn_scan)
+        mssql_layout.addStretch()
+        self._src_stack.addWidget(mssql_page)
+
+        # Shared table preview (below the stack)
         self._source_table = QTableWidget(0, 2)
         self._source_table.setHorizontalHeaderLabels(["Table", "Rows"])
         self._source_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
@@ -177,7 +265,7 @@ class DbMigrationDialog(QDialog):
         self._source_table.verticalHeader().setVisible(False)
         layout.addWidget(self._source_table)
 
-        self._source_status = QLabel("No file selected.")
+        self._source_status = QLabel("No source selected.")
         self._source_status.setStyleSheet("color: #888; font-size: 11px;")
         layout.addWidget(self._source_status)
 
@@ -278,6 +366,15 @@ class DbMigrationDialog(QDialog):
     # Source panel actions
     # ------------------------------------------------------------------
 
+    def _on_source_type_changed(self) -> None:
+        self._src_stack.setCurrentIndex(0 if self._rb_sqlite.isChecked() else 1)
+        self._source_table.setRowCount(0)
+        self._source_status.setText("No source selected.")
+        self._source_status.setStyleSheet("color: #888; font-size: 11px;")
+        self._detected_db_type = None
+        self._connection_verified = False
+        self._refresh_migrate_button()
+
     def _browse_source(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
             self, "Select SQLite Database", "",
@@ -289,9 +386,12 @@ class DbMigrationDialog(QDialog):
         self._scan_source(path)
 
     def _scan_source(self, path: str) -> None:
+        tables = get_sqlite_table_info(path) if _MIGRATOR_AVAILABLE else []
+        self._populate_source_table(tables)
+
+    def _populate_source_table(self, tables: list) -> None:
         self._source_table.setRowCount(0)
         self._detected_db_type = None
-        tables = get_sqlite_table_info(path) if _MIGRATOR_AVAILABLE else []
         if not tables:
             self._source_status.setText("No recognisable tables found.")
             self._source_status.setStyleSheet("color: #c00; font-size: 11px;")
@@ -327,6 +427,38 @@ class DbMigrationDialog(QDialog):
         )
         self._source_status.setStyleSheet("color: #080; font-size: 11px;")
         self._refresh_migrate_button()
+
+    def _test_source_connection(self) -> None:
+        server   = self._src_server_input.text().strip()
+        database = self._src_database_input.text().strip()
+        port_str = self._src_port_input.text().strip()
+        if not server or not database:
+            self._src_conn_status.setText("Server and database required.")
+            self._src_conn_status.setStyleSheet("color: #c00;")
+            return
+        port = int(port_str) if port_str else 1433
+        self._btn_src_test.setEnabled(False)
+        self._src_conn_status.setText("Testing…")
+        self._src_conn_status.setStyleSheet("color: #888;")
+        worker = _TestConnectionWorker(server, database, port)
+        worker.signals.log.connect(lambda m: self._src_conn_status.setText(m))
+        worker.signals.done.connect(self._on_src_test_done)
+        self._pool.start(worker)
+
+    def _on_src_test_done(self, ok: bool) -> None:
+        self._btn_src_test.setEnabled(True)
+        self._src_conn_status.setStyleSheet("color: #080; font-weight: bold;" if ok else "color: #c00;")
+
+    def _scan_mssql_source(self) -> None:
+        server   = self._src_server_input.text().strip()
+        database = self._src_database_input.text().strip()
+        port     = int(self._src_port_input.text().strip() or 1433)
+        if not server or not database:
+            self._source_status.setText("Enter server and database name first.")
+            self._source_status.setStyleSheet("color: #c00; font-size: 11px;")
+            return
+        tables = get_mssql_table_info(server, database, port) if _MIGRATOR_AVAILABLE else []
+        self._populate_source_table(tables)
 
     # ------------------------------------------------------------------
     # Target panel actions
@@ -383,10 +515,9 @@ class DbMigrationDialog(QDialog):
         )
 
     def _start_migration(self) -> None:
-        server   = self._server_input.text().strip()
-        database = self._database_input.text().strip()
-        port     = int(self._port_input.text().strip() or 1433)
-        source   = self._source_path.text()
+        dst_server   = self._server_input.text().strip()
+        dst_database = self._database_input.text().strip()
+        dst_port     = int(self._port_input.text().strip() or 1433)
 
         self._btn_migrate.setEnabled(False)
         self._btn_test.setEnabled(False)
@@ -394,7 +525,19 @@ class DbMigrationDialog(QDialog):
         self._log_output.clear()
         self._log("Starting migration…")
 
-        worker = _MigrationWorker(source, server, database, port)
+        if self._rb_sqlite.isChecked():
+            worker = _MigrationWorker(
+                self._source_path.text(), dst_server, dst_database, dst_port
+            )
+        else:
+            src_server   = self._src_server_input.text().strip()
+            src_database = self._src_database_input.text().strip()
+            src_port     = int(self._src_port_input.text().strip() or 1433)
+            worker = _MssqlToMssqlWorker(
+                src_server, src_database, src_port,
+                dst_server, dst_database, dst_port,
+            )
+
         worker.signals.log.connect(self._log)
         worker.signals.done.connect(self._on_migration_done)
         self._pool.start(worker)

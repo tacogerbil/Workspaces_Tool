@@ -214,6 +214,111 @@ def get_sqlite_table_info(sqlite_path: str) -> list[dict]:
     return found
 
 
+def get_mssql_table_info(server: str, database: str, port: int = 1433) -> list[dict]:
+    """Return [{name, row_count}] for all known tables found in an MSSQL database."""
+    found = []
+    try:
+        conn = _connect_mssql(server, database, port)
+        cur = conn.cursor()
+        for table in _MSSQL_DDLS:
+            if _table_exists_mssql(cur, table):
+                cur.execute(f"SELECT COUNT(*) FROM [{table}]")
+                count = cur.fetchone()[0]
+                found.append({"name": table, "row_count": count})
+        conn.close()
+    except Exception as exc:
+        logging.error(f"MSSQL scan failed: {exc}")
+    return found
+
+
+def migrate_mssql_to_mssql(
+    src_server: str,
+    src_database: str,
+    src_port: int,
+    dst_server: str,
+    dst_database: str,
+    dst_port: int,
+    batch_size: int = 500,
+    progress_fn: Optional[callable] = None,
+) -> None:
+    """Copy all known tables from one SQL Server database to another.
+
+    Uses SELECT * from the source and bulk INSERT into the destination,
+    creating destination tables from the built-in DDL if they don't exist.
+    """
+    def _log(msg: str) -> None:
+        logging.info(msg)
+        if progress_fn:
+            progress_fn(msg)
+
+    _log(f"Source MSSQL: {src_server},{src_port}/{src_database}")
+    _log(f"Target MSSQL: {dst_server},{dst_port}/{dst_database}")
+
+    src_conn = _connect_mssql(src_server, src_database, src_port)
+    dst_conn = _connect_mssql(dst_server, dst_database, dst_port)
+    src_cur  = src_conn.cursor()
+    dst_cur  = dst_conn.cursor()
+
+    tables_to_migrate = [t for t in _MSSQL_DDLS if _table_exists_mssql(src_cur, t)]
+
+    if not tables_to_migrate:
+        _log("⚠ No recognisable tables found in source database. Nothing to migrate.")
+        src_conn.close()
+        dst_conn.close()
+        return
+
+    _log(f"Found {len(tables_to_migrate)} table(s): {', '.join(tables_to_migrate)}")
+
+    identity_cols = {"id", "HistoryId", "UsageId", "group_id"}
+
+    for table in tables_to_migrate:
+        # Create in destination if absent
+        if not _table_exists_mssql(dst_cur, table):
+            _log(f"Creating table [{table}]…")
+            try:
+                dst_cur.execute(_MSSQL_DDLS[table])
+                dst_conn.commit()
+            except Exception as exc:
+                _log(f"  ✗ Failed to create [{table}]: {exc}")
+                continue
+
+        # Read all rows from source
+        src_cur.execute(f"SELECT * FROM [{table}]")
+        col_names = [col[0] for col in src_cur.description]
+        rows = src_cur.fetchall()
+
+        if not rows:
+            _log(f"  [{table}] is empty — skipping.")
+            continue
+
+        _log(f"Migrating [{table}] — {len(rows):,} rows…")
+
+        insert_cols = [c for c in col_names if c not in identity_cols]
+        col_list     = ", ".join(f"[{c}]" for c in insert_cols)
+        placeholders = ", ".join("?" for _ in insert_cols)
+        insert_sql   = f"INSERT INTO [{table}] ({col_list}) VALUES ({placeholders})"
+        col_indices  = [col_names.index(c) for c in insert_cols]
+
+        inserted, failed = 0, 0
+        for i in range(0, len(rows), batch_size):
+            batch = [tuple(row[idx] for idx in col_indices) for row in rows[i : i + batch_size]]
+            try:
+                dst_cur.executemany(insert_sql, batch)
+                dst_conn.commit()
+                inserted += len(batch)
+            except Exception as exc:
+                dst_conn.rollback()
+                failed += len(batch)
+                _log(f"  ✗ Batch failed for [{table}]: {exc}")
+
+        _log(f"  ✓ [{table}]: {inserted:,} rows inserted" +
+             (f", {failed:,} failed" if failed else ""))
+
+    src_conn.close()
+    dst_conn.close()
+    _log("✓ Migration complete.")
+
+
 def _table_exists_mssql(cursor: pyodbc.Cursor, table: str) -> bool:
     cursor.execute(
         "SELECT 1 FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME=?", (table,)
