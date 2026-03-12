@@ -427,14 +427,26 @@ class AwsAdWorkspaceService:
     def _archive_orphans_sqlite(
         self, cursor: Any, aws_data: Dict, ad_devices: Dict
     ) -> None:
-        """Moves workspaces no longer present in AWS into historical_archives as DELETED."""
+        """Classifies workspaces no longer present in AWS.
+
+        - Gone from AWS, still in AD → AWSStatus='PHANTOM', stays visible in dashboard.
+        - Gone from AWS AND AD      → archived as DELETED (visible only via Show Archived).
+        """
         cursor.execute("SELECT WorkspaceId, ComputerName FROM workspaces")
         db_ws = {row[0]: row[1] for row in cursor.fetchall()}
         aws_ids = set(aws_data.keys())
+        ad_names = set(ad_devices.keys())
 
         for ws_id, cname in db_ws.items():
             if ws_id not in aws_ids:
-                self._archive_single_sqlite(cursor, ws_id)
+                if cname and cname in ad_names:
+                    cursor.execute(
+                        "UPDATE workspaces SET AWSStatus='PHANTOM' WHERE WorkspaceId=?",
+                        (ws_id,),
+                    )
+                    logging.info(f"Workspace {ws_id} gone from AWS, AD object remains — PHANTOM.")
+                else:
+                    self._archive_single_sqlite(cursor, ws_id)
 
     def _archive_single_sqlite(self, cursor: Any, workspace_id: str) -> None:
         """Moves one workspace from live tables to historical_archives as DELETED."""
@@ -503,6 +515,12 @@ class AwsAdWorkspaceService:
             ad_date = ad_devices.get(cname, {}).get("CreationDate") if cname else None
             original_date = ad_date or db_date or today_str
 
+            # In AWS but AD device is missing → PHANTOM (only when we have fresh AD data)
+            if ad_devices and cname and cname not in ad_devices:
+                aws_status = "PHANTOM"
+            else:
+                aws_status = ws.get("State")
+
             cursor.execute(
                 """REPLACE INTO workspaces (
                     WorkspaceId, ComputerName, UserName, AWSStatus, DaysInactive,
@@ -512,7 +530,7 @@ class AwsAdWorkspaceService:
                     ConnectionState, LastStateCheck, UserLastActive
                 ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
-                    ws_id, cname, ws.get("UserName"), ws.get("State"),
+                    ws_id, cname, ws.get("UserName"), aws_status,
                     ws.get("DaysInactive", -1), props.get("RunningMode"),
                     props.get("ComputeTypeName"), props.get("RootVolumeSizeGib"),
                     props.get("UserVolumeSizeGib"), original_date, today_str,
@@ -572,6 +590,11 @@ class AwsAdWorkspaceService:
             original_date = (
                 ad_devices.get(cname, {}).get("CreationDate") if cname else None
             ) or today_str
+            # In AWS but AD device is missing → PHANTOM (only when we have fresh AD data)
+            if ad_devices and cname and cname not in ad_devices:
+                aws_status = "PHANTOM"
+            else:
+                aws_status = ws.get("State")
             # Use MSSQL MERGE for upsert
             self._db.execute_query(
                 """MERGE INTO workspaces AS target
@@ -591,7 +614,7 @@ class AwsAdWorkspaceService:
                 ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?);""",
                 (
                     ws_id,
-                    cname, ws.get("UserName"), ws.get("State"), ws.get("DaysInactive", -1),
+                    cname, ws.get("UserName"), aws_status, ws.get("DaysInactive", -1),
                     props.get("RunningMode"), props.get("ComputeTypeName"),
                     props.get("RootVolumeSizeGib"), props.get("UserVolumeSizeGib"),
                     today_str, ws.get("DirectoryId"),
@@ -599,7 +622,7 @@ class AwsAdWorkspaceService:
                     props.get("OperatingSystemName"),
                     props.get("RunningModeAutoStopTimeoutInMinutes"),
                     ws.get("ConnectionState"), ws.get("LastStateCheck"), ws.get("UserLastActive"),
-                    ws_id, cname, ws.get("UserName"), ws.get("State"), ws.get("DaysInactive", -1),
+                    ws_id, cname, ws.get("UserName"), aws_status, ws.get("DaysInactive", -1),
                     props.get("RunningMode"), props.get("ComputeTypeName"),
                     props.get("RootVolumeSizeGib"), props.get("UserVolumeSizeGib"),
                     original_date, today_str, ws.get("DirectoryId"),
@@ -670,7 +693,11 @@ class AwsAdWorkspaceService:
             )
 
     def _archive_orphans_generic(self, aws_data: Dict, ad_devices: Dict) -> None:
-        """Archives workspaces absent from both AWS fetch and AD (MSSQL path)."""
+        """Classifies workspaces no longer present in AWS (MSSQL path).
+
+        - Gone from AWS, still in AD → AWSStatus='PHANTOM', stays visible in dashboard.
+        - Gone from AWS AND AD      → archived as DELETED (visible only via Show Archived).
+        """
         db_ws_df = self._db.read_sql("SELECT WorkspaceId, ComputerName FROM workspaces")
         if db_ws_df.empty:
             return
@@ -679,8 +706,16 @@ class AwsAdWorkspaceService:
 
         for row in db_ws_df.to_dict("records"):
             ws_id = row["WorkspaceId"]
+            cname = row.get("ComputerName")
             if ws_id not in aws_ids:
-                self._archive_single_generic(ws_id)
+                if cname and cname in ad_names:
+                    self._db.execute_query(
+                        "UPDATE workspaces SET AWSStatus='PHANTOM' WHERE WorkspaceId=?",
+                        (ws_id,),
+                    )
+                    logging.info(f"Workspace {ws_id} gone from AWS, AD object remains — PHANTOM.")
+                else:
+                    self._archive_single_generic(ws_id)
 
     def _archive_single_generic(self, workspace_id: str) -> None:
         """Moves one workspace from live tables to historical_archives (MSSQL path)."""

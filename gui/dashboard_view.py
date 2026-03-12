@@ -220,7 +220,9 @@ class DashboardView(QWidget):
         if self._config:
             saved = self._config.get_dashboard_columns()
             if saved:
+                logging.info(f"[DashboardView] Loaded {len(saved)} saved columns.")
                 return saved
+        logging.info("[DashboardView] No saved columns found — using defaults.")
         return list(DEFAULT_DASHBOARD_COLUMNS)
 
     def _load_sort_prefs(self) -> tuple[str, str]:
@@ -342,6 +344,10 @@ class DashboardView(QWidget):
         self._proxy = _SmartSortProxyModel()
         self._proxy.setSourceModel(self._source_model)
         self._tree.setModel(self._proxy)
+        # Disable drag-reordering of columns — the column config dialog is the
+        # single source of truth for order.  Without this, visual drags diverge
+        # from _active_columns and the two fight each other.
+        self._tree.header().setSectionsMovable(False)
 
         # Ctrl+C shortcut
         shortcut = QShortcut(QKeySequence.Copy, self._tree)
@@ -749,7 +755,7 @@ class DashboardView(QWidget):
                 item.setFont(fnt)
             return
 
-        if record_type == "PHANTOM_AWS":
+        if record_type == "PHANTOM_AWS" or str(row.get("AWSStatus", "")).upper() == "PHANTOM":
             phantom_bg = QColor("#FFDDC1")
             for item in items:
                 item.setBackground(phantom_bg)

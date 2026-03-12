@@ -275,15 +275,20 @@ class ConfigAdapter:
         """
         config = self.load_config()
         raw = config.get("Dashboard", "visible_columns", fallback="")
-        if raw:
-            return [c.strip() for c in raw.split(",") if c.strip()]
-        return []
+        cols = [c.strip() for c in raw.split(",") if c.strip()] if raw else []
+        logging.info(f"[ConfigAdapter] get_dashboard_columns path={self.config_path} → {cols}")
+        return cols
 
     def set_dashboard_columns(self, columns: List[str]) -> None:
         """Persist the ordered list of visible column IDs for the Dashboard view."""
+        logging.info(f"[ConfigAdapter] set_dashboard_columns path={self.config_path} cols={columns}")
         self._set_section_values(
             "Dashboard", {"visible_columns": ",".join(columns)}
         )
+        # Verify the write landed
+        verify = self.get_dashboard_columns()
+        if verify != columns:
+            logging.error(f"[ConfigAdapter] Column save MISMATCH — wrote {columns}, read back {verify}")
 
     def get_dashboard_sort(self) -> tuple[str, str]:
         """Returns the saved sort state as (column_id, direction).
