@@ -534,7 +534,7 @@ def enrich_dataframe(
     if "Company" in df.columns and aliases:
         from services.workspace_data_processor import standardize_alias_key
         df["Company"] = df["Company"].apply(
-            lambda v: aliases.get(standardize_alias_key(v), v) if v else v
+            lambda v: aliases.get(standardize_alias_key(v), v) if isinstance(v, str) and v else v
         )
 
     # 3. Computed: DaysInExistence
